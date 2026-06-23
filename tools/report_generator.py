@@ -1,7 +1,57 @@
 """Report generation tools."""
 import os
 from datetime import datetime
+import markdown
+from xhtml2pdf import pisa
 from config import OUTPUT_DIR
+
+
+def _md_to_styled_html(md_content: str, title: str = "Learning Path Report") -> str:
+    """Convert Markdown to styled HTML suitable for PDF rendering via xhtml2pdf."""
+    body = markdown.markdown(md_content, extensions=["tables", "fenced_code", "codehilite"])
+    return f"""<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  @page {{ size: A4; margin: 2cm 1.8cm; }}
+  body {{ font-family: "Microsoft YaHei", "SimHei", sans-serif; font-size: 12pt; line-height: 1.8; color: #222; }}
+  h1 {{ font-size: 22pt; color: #1a5276; border-bottom: 2px solid #2980b9; padding-bottom: 6px; }}
+  h2 {{ font-size: 16pt; color: #2471a3; margin-top: 24px; border-bottom: 1px solid #aed6f1; padding-bottom: 4px; }}
+  h3 {{ font-size: 13pt; color: #2e86c1; margin-top: 16px; }}
+  p {{ margin: 6px 0; }}
+  ul, ol {{ margin: 6px 0 6px 20px; }}
+  li {{ margin: 3px 0; }}
+  code {{ background: #f4f4f4; padding: 2px 5px; font-size: 10pt; }}
+  pre {{ background: #f8f8f8; padding: 10px; border: 1px solid #ddd; font-size: 9pt; }}
+  blockquote {{ border-left: 3px solid #3498db; padding-left: 14px; color: #555; margin: 10px 0; }}
+  table {{ border: 1px solid #ccc; width: 100%; margin: 10px 0; }}
+  th {{ background: #eaf2f8; padding: 6px 10px; }}
+  td {{ padding: 6px 10px; border: 1px solid #ddd; }}
+  hr {{ border: none; border-top: 1px solid #ddd; margin: 20px 0; }}
+  strong {{ color: #1a5276; }}
+  a {{ color: #2980b9; }}
+</style>
+</head>
+<body>
+{body}
+</body>
+</html>"""
+
+
+def save_pdf_report(content: str, filename_prefix: str = "learning_path") -> str:
+    """Convert Markdown report to a styled PDF using xhtml2pdf (pure Python).
+
+    Returns:
+        Absolute path to the generated PDF file.
+    """
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"{filename_prefix}_{timestamp}.pdf"
+    filepath = os.path.join(OUTPUT_DIR, filename)
+    html = _md_to_styled_html(content)
+    with open(filepath, "wb") as f:
+        pisa.CreatePDF(html, dest=f, encoding="utf-8")
+    return filepath
 
 
 def save_markdown_report(content: str, filename_prefix: str = "report") -> str:

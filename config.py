@@ -28,9 +28,9 @@ os.makedirs(PAPERS_DIR, exist_ok=True)
 # --- Email configuration (QQ Mail) ---
 EMAIL_SMTP_SERVER = os.getenv("EMAIL_SMTP_SERVER", "smtp.qq.com")
 EMAIL_SMTP_PORT = int(os.getenv("EMAIL_SMTP_PORT", "465"))
-EMAIL_SENDER = os.getenv("EMAIL_SENDER", "1739362977@qq.com")
+EMAIL_SENDER = os.getenv("EMAIL_SENDER", "#########")
 EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD", "")
-EMAIL_RECIPIENT = os.getenv("EMAIL_RECIPIENT", "1739362977@qq.com")
+EMAIL_RECIPIENT = os.getenv("EMAIL_RECIPIENT", "#####")
 
 
 def validate_config():
