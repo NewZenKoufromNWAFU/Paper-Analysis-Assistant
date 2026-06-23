@@ -1,192 +1,142 @@
 import streamlit as st
 import os
-import tempfile
 import traceback
-from langgraph.graph import StateGraph
-from agents.planner import planner_agent
-from agents.search import search_agent
-from agents.reader import reader_agent
-from agents.writer import writer_agent
-from agents.reviewer import reviewer_agent
-from config import OUTPUT_DIR, validate_config, LLM_API_KEY
-from tools.report_generator import save_markdown_report, build_report_markdown
-from tools.pdf_parser import parse_pdf
+from state import AgentState
+from config import OUTPUT_DIR, validate_config
+from tools.report_generator import save_markdown_report
+from tools.email_sender import create_zip, send_email
 
-st.set_page_config(page_title="Paper Analyzer", page_icon="📄", layout="wide")
-st.title("📄 AI Auto Paper Analysis Assistant")
-st.caption("Multi-Agent System: Planner | Search | Reader | Writer | Reviewer")
+st.set_page_config(page_title="Academic Learning Path", page_icon="🎓", layout="wide")
+st.title("🎓 Academic Learning Path Generator")
+st.caption("AI-powered beginner learning path | Search -> Download -> Analyze -> Rank -> Write -> Email")
 
-# API key check
-api_key = os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY") or ""
-if not api_key:
-    st.warning("API Key not set. Set DEEPSEEK_API_KEY or OPENAI_API_KEY environment variable.", icon="⚠️")
-    with st.expander("How to set API Key"):
-        st.code('$env:DEEPSEEK_API_KEY="sk-your-key"  # PowerShell', language="powershell")
-        st.caption("Get a free key: https://platform.deepseek.com")
-
-tab1, tab2 = st.tabs(["Analysis", "History"])
-
-PROGRESS_STEPS = {
-    "planner": "📋 Planning analysis tasks...",
-    "search": "🔍 Searching related papers...",
-    "reader": "📖 Extracting paper information...",
-    "writer": "✍️ Generating literature review...",
-    "reviewer": "🔎 Reviewing and scoring...",
-    "finalize": "✅ Finalizing report...",
+PROGRESS = {
+    "planner": ("📋", "Planning search strategy...", 5),
+    "search": ("🔍", "Searching papers on arXiv & Semantic Scholar...", 15),
+    "downloader": ("⬇️", "Downloading PDFs from arXiv...", 30),
+    "reader": ("📖", "Analyzing paper difficulty and content...", 45),
+    "ranker": ("📊", "Ranking papers from easiest to hardest...", 65),
+    "writer": ("✍️", "Writing personalized learning path...", 80),
+    "email": ("📧", "Packaging and sending email...", 95),
 }
+
+tab1, tab2 = st.tabs(["🚀 Generate Path", "📂 Saved Reports"])
 
 with tab1:
     col1, col2 = st.columns([1, 2])
     with col1:
-        st.subheader("Configuration")
-        direction = st.text_input("Research Keyword", placeholder="e.g., Transformer, RLHF")
-        st.caption("Used to find related papers. The PDF is the primary subject.")
-        uploaded_file = st.file_uploader("Upload PDF Paper", type="pdf")
-        st.caption("Required. This paper will be the focus of analysis.")
-        run_btn = st.button("Start Analysis", type="primary", use_container_width=True)
+        st.subheader("📋 Input")
+        keyword = st.text_input("Research Keyword", placeholder="e.g., Transformer, GNN, RLHF, Diffusion Model")
+        st.caption("We will search for beginner-friendly papers on this topic.")
+        email = st.text_input("Email (optional)", placeholder="your@email.com")
+        st.caption("Receive the papers and learning path by email.")
+        api_key = os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY") or ""
+        if not api_key:
+            st.warning("API Key not set. Set DEEPSEEK_API_KEY.", icon="⚠️")
+        run_btn = st.button("🚀 Generate Learning Path", type="primary", use_container_width=True)
 
     with col2:
-        st.subheader("Workflow Progress")
+        st.subheader("📊 Progress")
         progress_placeholder = st.empty()
 
     if run_btn:
-        if not direction:
+        if not keyword:
             st.error("Please enter a research keyword.")
-        elif not uploaded_file:
-            st.error("Please upload a PDF paper to analyze.")
         else:
             issues = validate_config()
             if issues:
                 for issue in issues:
-                    st.error(issue)
-            else:
-                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-                    tmp.write(uploaded_file.read())
-                    pdf_path = tmp.name
-                with st.spinner("Parsing PDF..."):
-                    pdf_text = parse_pdf(pdf_path)
-                if not pdf_text or len(pdf_text.strip()) < 100:
-                    st.error("PDF appears empty or unreadable.")
-                else:
-                    st.success(f"PDF loaded: {len(pdf_text)} characters")
+                    st.warning(issue)
 
-                    with progress_placeholder.container():
-                        st.info("Multi-agent pipeline running...")
-                        progress_bar = st.progress(0, text="Starting...")
-                        status_text = st.empty()
+            with progress_placeholder.container():
+                st.info("Running multi-agent pipeline...")
+                bar = st.progress(0, text="Starting...")
+                log = st.empty()
 
-                        def show_step(step_name, message, pct):
-                            progress_bar.progress(pct, text=PROGRESS_STEPS.get(step_name, step_name))
-                            status_text.markdown(message)
+                def step(name, msg, pct):
+                    bar.progress(pct, text=PROGRESS[name][1])
+                    log.info(msg)
 
-                        try:
-                            # Build initial state
-                            state = {
-                                "research_direction": direction,
-                                "pdf_file_path": pdf_path,
-                                "pdf_text": pdf_text,
-                                "task_plan": [],
-                                "search_keywords": [],
-                                "search_results": [],
-                                "primary_paper": {},
-                                "related_papers_summary": [],
-                                "draft_report": "",
-                                "draft_references": "",
-                                "review_feedback": {},
-                                "final_report": "",
-                                "final_references": "",
-                                "revision_round": 0,
-                                "error": None,
-                                "status_message": "Starting...",
-                            }
+                try:
+                    from agents.planner import planner_agent
+                    from agents.search import search_agent
+                    from agents.downloader import downloader_agent
+                    from agents.reader import reader_agent
+                    from agents.ranker import ranker_agent
+                    from agents.writer import writer_agent
 
-                            # Step 1: Planner
-                            state = planner_agent(state)
-                            show_step("planner", state.get("status_message", ""), 10)
+                    state = {"research_keyword": keyword, "email_recipient": email or "1739362977@qq.com"}
 
-                            # Step 2: Search
-                            state = search_agent(state)
-                            show_step("search", state.get("status_message", ""), 25)
+                    # 1. Planner
+                    state = planner_agent(state)
+                    step("planner", state.get("status_message",""), 5)
 
-                            # Step 3: Reader
-                            state = reader_agent(state)
-                            show_step("reader", state.get("status_message", ""), 40)
+                    # 2. Search
+                    state = search_agent(state)
+                    step("search", state.get("status_message",""), 15)
 
-                            # Step 4: Writer
-                            state = writer_agent(state)
-                            show_step("writer", state.get("status_message", ""), 55)
+                    # 3. Downloader
+                    state = downloader_agent(state)
+                    step("downloader", state.get("status_message",""), 30)
 
-                            # Step 5-6: Reviewer loop
-                            state = reviewer_agent(state)
-                            show_step("reviewer", state.get("status_message", ""), 70)
+                    # 4. Reader
+                    state = reader_agent(state)
+                    step("reader", state.get("status_message",""), 45)
 
-                            rev_round = 0
-                            while state.get("review_feedback", {}).get("needs_revision") and rev_round < 2:
-                                rev_round += 1
-                                state["revision_round"] = rev_round
-                                state = writer_agent(state)
-                                show_step("writer", f"🔄 Revision round {rev_round}: " + state.get("status_message", ""), 75 + rev_round * 10)
-                                state = reviewer_agent(state)
-                                show_step("reviewer", f"🔍 Reviewer: Score {state.get('review_feedback',{}).get('score','N/A')}/10", 85 + rev_round * 5)
+                    # 5. Ranker
+                    state = ranker_agent(state)
+                    step("ranker", state.get("status_message",""), 65)
 
-                            # Finalize
-                            state["final_report"] = state.get("draft_report", "")
-                            state["final_references"] = state.get("draft_references", "")
-                            progress_bar.progress(100, text="✅ Complete!")
-                            status_text.markdown(state.get("status_message", "Done"))
+                    # 6. Writer
+                    state = writer_agent(state)
+                    step("writer", state.get("status_message",""), 80)
 
-                            if state.get("final_report"):
-                                report_md = build_report_markdown(
-                                    research_direction=state.get("research_direction", ""),
-                                    primary_paper=state.get("primary_paper", {}),
-                                    search_results=state.get("search_results", []),
-                                    draft_report=state.get("final_report", ""),
-                                    draft_references=state.get("final_references", ""),
-                                    review_feedback=state.get("review_feedback", {}),
-                                )
-                                filepath = save_markdown_report(report_md)
+                    report = state.get("learning_path_report", "")
+                    if report:
+                        report_path = save_markdown_report(report, "learning_path")
+                        bar.progress(95, text="Packaging and sending email...")
+                        ranked = state.get("ranked_papers", [])
+                        downloaded = state.get("downloaded_papers", [])
+                        zip_path = create_zip(downloaded, report_path)
+                        state["zip_path"] = zip_path
 
-                                st.divider()
-                                st.subheader("📄 Results")
-                                st.download_button(
-                                    "Download Report (Markdown)",
-                                    report_md,
-                                    file_name="paper_report.md",
-                                    mime="text/markdown",
-                                )
+                        recipient = email.strip() if email and email.strip() else "1739362977@qq.com"
+                        subject = f"[Learning Path] {keyword} - Beginner Paper Reading List"
+                        html_body = f"""<h2>Your Learning Path: {keyword}</h2><p>Hi! Here is your personalized beginner learning path for <b>{keyword}</b>.</p><p>Contains <b>{len(ranked)} curated papers</b> ranked from easiest to hardest, plus full PDF downloads.</p><p>Happy reading!</p><hr><small>Generated by AI Multi-Agent Learning Path System</small>"""
+                        sent = send_email(subject, html_body, zip_path, recipient)
+                        if sent:
+                            log.success(f"Email sent to {recipient}")
+                        else:
+                            log.warning(f"Email not sent (check EMAIL_PASSWORD). Report saved locally.")
 
-                                with st.expander("Paper Analysis Review", expanded=True):
-                                    st.markdown(state.get("final_report", ""))
-                                with st.expander("References", expanded=False):
-                                    st.text(state.get("final_references", "No references"))
-                                with st.expander("Review Feedback", expanded=False):
-                                    fb = state.get("review_feedback", {})
-                                    if fb:
-                                        st.metric("Score", f"{fb.get('score', 'N/A')}/10")
-                                        for k in ["completeness", "accuracy", "structure", "suggestions"]:
-                                            if fb.get(k):
-                                                st.caption(f"**{k}**: {fb[k]}")
-                            else:
-                                st.warning("No report was generated.")
-                        except Exception as e:
-                            st.error(f"Pipeline error: {e}")
-                            st.code(traceback.format_exc())
+                        bar.progress(100, text="Complete!")
+                        st.success(f"Learning path with {len(ranked)} papers generated!")
+
+                        with st.expander("Learning Path Report", expanded=True):
+                            st.markdown(report)
+                        st.download_button("Download Report", report, file_name="learning_path.md", mime="text/markdown")
+                        st.caption(f"Papers saved in: {os.path.abspath('papers')}")
+                        st.caption(f"Zip: {zip_path}")
+                    else:
+                        st.warning("No report generated.")
+                except Exception as e:
+                    st.error(f"Error: {e}")
+                    st.code(traceback.format_exc())
 
 with tab2:
     st.subheader("Saved Reports")
     if os.path.exists(OUTPUT_DIR):
         files = sorted(os.listdir(OUTPUT_DIR), reverse=True)
         if files:
-            for fname in files[:30]:
-                fpath = os.path.join(OUTPUT_DIR, fname)
-                st.text(fname)
-                with open(fpath, "r", encoding="utf-8") as f:
-                    content = f.read()
-                with st.expander(f"Preview: {fname}"):
-                    st.markdown(content[:5000])
-                    if len(content) > 5000:
-                        st.caption("... (truncated)")
+            for fn in files[:30]:
+                fp = os.path.join(OUTPUT_DIR, fn)
+                st.text(fn)
+                if fn.endswith(".md"):
+                    with open(fp, "r", encoding="utf-8") as ff:
+                        content = ff.read()
+                    with st.expander(f"Preview: {fn}"):
+                        st.markdown(content[:5000])
         else:
-            st.caption("No saved reports yet. Run an analysis first!")
+            st.caption("No saved reports yet. Generate a learning path!")
     else:
         st.caption("Output directory not found.")

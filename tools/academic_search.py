@@ -5,7 +5,7 @@ from config import MAX_SEARCH_RESULTS
 
 def search_semantic_scholar(query: str, max_results: int = MAX_SEARCH_RESULTS, year_from: Optional[int] = None) -> List[dict]:
     base_url = "https://api.semanticscholar.org/graph/v1/paper/search"
-    params = {"query": query, "limit": min(max_results, 100), "fields": "title,authors,year,venue,abstract,url,citationCount"}
+    params = {"query": query, "limit": min(max_results, 100), "fields": "title,authors,year,venue,abstract,url,citationCount,externalIds"}
     if year_from:
         params["year"] = f"{year_from}-"
     try:
@@ -20,9 +20,19 @@ def search_semantic_scholar(query: str, max_results: int = MAX_SEARCH_RESULTS, y
         authors = ", ".join([a.get("name","") for a in p.get("authors",[])[:5]])
         if p.get("authors") and len(p["authors"]) > 5:
             authors += " et al."
-        results.append({"title": p.get("title",""), "authors": authors, "year": str(p.get("year","")), "venue": p.get("venue",""), "abstract": p.get("abstract","") or "", "url": p.get("url",""), "citation_count": p.get("citationCount",0)})
+        ext = p.get("externalIds", {}) or {}
+        results.append({
+            "title": p.get("title",""),
+            "authors": authors,
+            "year": str(p.get("year","")),
+            "venue": p.get("venue",""),
+            "abstract": p.get("abstract","") or "",
+            "url": p.get("url",""),
+            "citation_count": p.get("citationCount",0),
+            "arxiv_id": ext.get("ArXiv",""),
+            "paper_id": p.get("paperId",""),
+        })
     return results
-
 def search_arxiv(query: str, max_results: int = MAX_SEARCH_RESULTS) -> List[dict]:
     base_url = "http://export.arxiv.org/api/query"
     params = {"search_query": f"all:{query}", "start": 0, "max_results": min(max_results,50), "sortBy": "relevance", "sortOrder": "descending"}
@@ -52,7 +62,18 @@ def search_arxiv(query: str, max_results: int = MAX_SEARCH_RESULTS) -> List[dict
         year = pub.text[:4] if pub is not None and pub.text else ""
         lid = entry.find("atom:id", ns)
         url = lid.text if lid is not None and lid.text else ""
-        results.append({"title": title, "authors": ", ".join(authors[:5]), "year": year, "venue": "arXiv", "abstract": abstract, "url": url, "citation_count": 0})
+        arxiv_id = url.split("/abs/")[-1] if "/abs/" in url else ""
+        results.append({
+            "title": title,
+            "authors": ", ".join(authors[:5]),
+            "year": year,
+            "venue": "arXiv",
+            "abstract": abstract,
+            "url": url,
+            "citation_count": 0,
+            "arxiv_id": arxiv_id,
+            "paper_id": "",
+        })
     return results
 
 def search_all(query: str, max_results: int = MAX_SEARCH_RESULTS) -> List[dict]:
@@ -60,7 +81,7 @@ def search_all(query: str, max_results: int = MAX_SEARCH_RESULTS) -> List[dict]:
     merged = []
     for r in search_semantic_scholar(query, max_results) + search_arxiv(query, max_results):
         key = r["title"].lower().strip()
-        if key not in seen:
+        if key and key not in seen:
             seen.add(key)
             merged.append(r)
     return merged[:max_results]
