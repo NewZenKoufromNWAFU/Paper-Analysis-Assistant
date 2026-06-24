@@ -29,13 +29,13 @@ def _is_valid_email(email_str: str) -> bool:
     return bool(re.match(pattern, email_str.strip()))
 
 
-def create_zip(selected_papers, pdf_report_path):
-    """Create a zip archive of user-selected papers and the PDF learning path report.
+def create_zip(selected_papers, report_path):
+    """Create a zip archive of user-selected papers and the HTML learning path report.
 
     Args:
         selected_papers: list of paper dicts (already filtered by user selection),
                          each must contain 'local_path'.
-        pdf_report_path: path to the generated PDF report file.
+        report_path: path to the generated HTML report file.
 
     Returns:
         Absolute path to the created zip file, or None if nothing to pack.
@@ -51,8 +51,8 @@ def create_zip(selected_papers, pdf_report_path):
                 zf.write(lp, os.path.basename(lp))
                 added += 1
 
-        if pdf_report_path and os.path.exists(pdf_report_path):
-            zf.write(pdf_report_path, os.path.basename(pdf_report_path))
+        if report_path and os.path.exists(report_path):
+            zf.write(report_path, os.path.basename(report_path))
             added += 1
 
     if added == 0:
