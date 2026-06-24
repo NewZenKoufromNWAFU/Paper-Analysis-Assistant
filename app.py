@@ -1,395 +1,337 @@
 import streamlit as st
 import os
-from datetime import datetime
-from config import EMAIL_RECIPIENT
-from tools.academic_search import search_papers
-from tools.paper_downloader import batch_download
-from tools.report_generator import save_pdf_report
-from tools.email_sender import create_zip, send_email
-from langchain_openai import ChatOpenAI
-from langchain_core.messages import HumanMessage, SystemMessage
-from config import LLM_API_KEY, LLM_BASE_URL, LLM_MODEL, LLM_TEMPERATURE
+import tempfile
+import traceback
+from langgraph.graph import StateGraph
+from agents.planner import planner_agent
+from agents.search import search_agent
+from agents.reader import reader_agent
+from agents.writer import writer_agent
+from agents.reviewer import reviewer_agent
+from config import OUTPUT_DIR, validate_config, LLM_API_KEY
+from tools.report_generator import save_markdown_report, build_report_markdown
+from tools.pdf_parser import parse_pdf
+from i18n import get_text, get_lang_label, ZH, EN
 
-st.set_page_config(page_title="Paper Learning Path", page_icon="🎓", layout="wide")
+st.set_page_config(page_title="Paper Analyzer", page_icon="📄", layout="wide")
 
-# ============================================================
-# 辅助函数
-# ============================================================
-def paper_key(paper: dict) -> str:
-    """Generate unique ID for a paper (arxiv_id >> paper_id >> title)."""
-    return (paper.get("arxiv_id") or paper.get("paper_id") or paper.get("title", "")).strip().lower()
+st.markdown("""
+<style>
+    * { font-family: "Inter", -apple-system, BlinkMacSystemFont, sans-serif; }
+    .main .block-container { padding-top: 2rem; }
 
+    [data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #0f172a 0%, #1e293b 100%);
+        border-right: none;
+    }
+    [data-testid="stSidebar"] * { color: #e2e8f0 !important; }
+    [data-testid="stSidebar"] .stSelectbox label { color: #94a3b8 !important; }
+    [data-testid="stSidebar"] hr { border-color: #334155; }
 
-def truncate_abstract(text: str, max_chars: int = 150) -> str:
-    if not text:
-        return "(无摘要)"
-    text = text.strip().replace("\n", " ")
-    if len(text) <= max_chars:
-        return text
-    return text[:max_chars].rsplit(" ", 1)[0] + "..."
+    .card-empty {
+        background: #f8fafc;
+        border: 2px dashed #e2e8f0;
+        border-radius: 16px;
+        padding: 48px 24px;
+        text-align: center;
+        color: #94a3b8;
+    }
 
+    .stButton > button {
+        border-radius: 12px !important;
+        font-weight: 600 !important;
+        padding: 12px 24px !important;
+    }
 
-def infer_authority(paper: dict) -> str:
-    cites = paper.get("citation_count", 0) or 0
-    if cites >= 1000:
-        return "[极高]"
-    elif cites >= 500:
-        return "[很高]"
-    elif cites >= 100:
-        return "[较高]"
-    elif cites >= 10:
-        return "[一般]"
-    else:
-        return "[新/低引用]"
+    h1 { font-weight: 700 !important; letter-spacing: -0.02em; }
+    h3 { font-weight: 600 !important; }
 
+    [data-testid="stFileUploader"] {
+        border: 2px dashed #cbd5e1;
+        border-radius: 16px;
+        padding: 20px;
+        transition: border-color 0.2s;
+    }
+    [data-testid="stFileUploader"]:hover { border-color: #6366f1; }
 
-def generate_learning_path_report(papers: list, keyword: str) -> str:
-    """Generate a learning path Markdown report with paper comparison table."""
-    llm = ChatOpenAI(
-        api_key=LLM_API_KEY, base_url=LLM_BASE_URL,
-        model=LLM_MODEL, temperature=LLM_TEMPERATURE,
+    .stProgress > div > div {
+        background-color: #6366f1 !important;
+        border-radius: 99px !important;
+    }
+
+    [data-testid="stExpander"] {
+        border: 1px solid #e2e8f0;
+        border-radius: 12px;
+    }
+
+    .pipeline-step {
+        display: inline-flex; align-items: center; gap: 6px;
+        padding: 6px 14px; border-radius: 99px;
+        font-size: 0.8rem; font-weight: 500;
+        background: #f1f5f9; color: #475569;
+        margin-right: 8px; margin-bottom: 8px;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+if "lang" not in st.session_state:
+    st.session_state.lang = ZH
+
+lang = st.session_state.lang
+
+with st.sidebar:
+    st.markdown("""
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:20px;">
+            <div style="width:36px;height:36px;background:#6366f1;border-radius:10px;
+                        display:flex;align-items:center;justify-content:center;font-size:18px;">📄</div>
+            <div style="font-weight:700;font-size:1.1rem;">Paper Analyzer</div>
+        </div>
+    """, unsafe_allow_html=True)
+
+    lang = st.selectbox(
+        get_text("app.lang_label", lang),
+        options=[ZH, EN],
+        format_func=get_lang_label,
+        key="lang",
     )
-
-    # Build comparison table
-    comparison_rows = []
-    for i, pp in enumerate(papers, 1):
-        comparison_rows.append(
-            f"| {i} | {pp.get('title', 'N/A')[:50]} | {pp.get('year', 'N/A')} | "
-            f"{pp.get('venue', 'N/A') or 'arXiv'} | {pp.get('citation_count', 0)} | "
-            f"{pp.get('authors', 'N/A')[:30]} |"
-        )
-    comparison_table = (
-        "| # | Paper | Year | Venue | Citations | Authors |\n"
-        "|---|-------|------|-------|-----------|--------|\n"
-        + "\n".join(comparison_rows)
-    )
-
-    papers_list = []
-    for i, pp in enumerate(papers, 1):
-        papers_list.append(
-            f"### Paper {i}: {pp.get('title', 'N/A')} ({pp.get('year', 'N/A')})\n\n"
-            f"- **Authors:** {pp.get('authors', 'N/A')}\n"
-            f"- **Venue:** {pp.get('venue', 'N/A') or 'arXiv'}\n"
-            f"- **Citations:** {pp.get('citation_count', 0)}\n"
-            f"- **Abstract:** {pp.get('abstract', '(none)')[:400]}\n"
-            f"- **arXiv ID:** {pp.get('arxiv_id', 'N/A')}\n"
-        )
-    papers_blob = "\n---\n\n".join(papers_list)
-
-    system = SystemMessage(content=(
-        f"You are an academic mentor creating a learning path. Research topic: {keyword}. "
-        "Write in Chinese. Use Markdown with emoji. Structure:\n"
-        "1. Overview of the research field, its importance, current trends, and the design rationale for this learning path\n"
-        "2. Paper comparison overview table showing title, year, venue, citations, and core contributions for each paper\n"
-        "3. For each paper: core contributions, innovations, algorithm breakthroughs, benchmark results, why it is worth reading, and practical reading tips\n"
-        "4. Suggested reading order with estimated time per paper\n"
-        "5. Next steps after completing the path (advanced directions, recommended tools/codebases/datasets)\n"
-        "Make it warm, encouraging, and beginner-friendly."
-    ))
-    human = HumanMessage(content=(
-        f"Paper comparison table:\n\n{comparison_table}\n\n"
-        f"Paper details:\n\n{papers_blob}\n\n"
-        f"Please generate a complete Chinese learning path guide."
-    ))
-    resp = llm.invoke([system, human])
-    return resp.content
-
-
-# ============================================================
-# 会话状态初始化
-# ============================================================
-DEFAULTS = {
-    "selected_papers": [],
-    "search_results": [],
-    "last_keyword": "",
-    "search_offset": 0,
-    "search_count": 5,
-    "generating": False,
-    "report_ready": False,
-    "pdf_path": "",
-    "zip_path": "",
-}
-if "seen_paper_keys" not in st.session_state:
-    st.session_state["seen_paper_keys"] = []
-for k, v in DEFAULTS.items():
-    if k not in st.session_state:
-        st.session_state[k] = v
-
-
-# ============================================================
-# UI
-# ============================================================
-st.title("🎓 论文搜索 & 学习路径生成器")
-st.caption("搜索论文 → 选择感兴趣的 → 生成学习路径 PDF → 预览 → 下载 / 发送邮箱")
-
-left, right = st.columns([1, 2])
-
-# ==================
-# 左栏 - 搜索表单
-# ==================
-with left:
-    st.subheader("🔍 搜索论文")
-
-    keyword = st.text_input(
-        "关键词 / 论文标题",
-        placeholder="e.g., Transformer, GNN, Diffusion Model...",
-        key="search_keyword",
-    )
-
-    search_count = st.slider(
-        "搜索数量", min_value=1, max_value=10, value=5, step=1,
-        help="每次搜索返回的论文数量",
-    )
-
-    time_option = st.selectbox(
-        "发表时间",
-        options=["不限时间", "近半年", "近 1 年", "近 3 年", "自定义年份区间"],
-        index=0,
-    )
-
-    year_from, year_to = None, None
-    current_year = datetime.now().year
-    if time_option == "近半年":
-        year_from = current_year if datetime.now().month > 6 else current_year - 1
-    elif time_option == "近 1 年":
-        year_from = current_year - 1
-    elif time_option == "近 3 年":
-        year_from = current_year - 3
-    elif time_option == "自定义年份区间":
-        c1, c2 = st.columns(2)
-        with c1:
-            yf = st.number_input("Start Year", min_value=1900, max_value=current_year, value=current_year - 5, step=1)
-        with c2:
-            yt = st.number_input("End Year", min_value=1900, max_value=current_year, value=current_year, step=1)
-        year_from, year_to = (yf, yt) if yf <= yt else (yt, yf)
-
-    if st.button("🔍 搜索论文", type="primary", use_container_width=True):
-        if not keyword.strip():
-            st.warning("Please enter a keyword")
-        else:
-            st.session_state.last_keyword = keyword.strip()
-            st.session_state.search_count = search_count
-            st.session_state.search_offset = 0
-            st.session_state.seen_paper_keys = []
-            with st.spinner(f"Searching '{keyword}' ..."):
-                results = search_papers(
-                    keyword.strip(),
-                    count=search_count,
-                    year_from=year_from,
-                    year_to=year_to,
-                    authoritative_only=True,
-                )
-            st.session_state.seen_paper_keys = [paper_key(r) for r in results]
-            st.session_state.search_results = results
-            st.rerun()
-
-    # Refresh / New search
-    if st.session_state.search_results:
-        st.divider()
-        cr, cn = st.columns(2)
-        with cr:
-            if st.button("🔀 Refresh", use_container_width=True,
-                         help="Same keyword, next batch (no duplicates)"):
-                st.session_state.search_offset += st.session_state.search_count
-                with st.spinner("Searching next batch..."):
-                    results = search_papers(
-                        st.session_state.last_keyword,
-                        count=st.session_state.search_count,
-                        year_from=year_from,
-                        year_to=year_to,
-                        offset=st.session_state.search_offset,
-                        authoritative_only=True,
-                        exclude_keys=set(st.session_state.seen_paper_keys),
-                    )
-                new_keys = [paper_key(r) for r in results]
-                st.session_state.seen_paper_keys = st.session_state.seen_paper_keys + new_keys
-                st.session_state.search_results = results
-                st.rerun()
-        with cn:
-            if st.button("🔄 New Search", use_container_width=True):
-                st.session_state.search_results = []
-                st.session_state.seen_paper_keys = []
-                st.rerun()
 
     st.divider()
 
-    # Selected papers basket
-    st.subheader(f"Selected Papers ({len(st.session_state.selected_papers)})")
-    if not st.session_state.selected_papers:
-        st.caption("No papers selected yet. Click [+] in search results to add.")
-    else:
-        for i, pp in enumerate(st.session_state.selected_papers):
-            ct, cx = st.columns([5, 1])
-            with ct:
-                ts = pp["title"][:50] + ("..." if len(pp["title"]) > 50 else "")
-                st.markdown(f"**{i+1}.** {ts}")
-                st.caption(f"{pp.get('year','?')} | {pp.get('authors','')[:30]}")
-            with cx:
-                if st.button("X", key=f"remove_{i}", help="Remove this paper"):
-                    st.session_state.selected_papers.pop(i)
-                    st.rerun()
-
-    # Generate button
-    if len(st.session_state.selected_papers) > 0:
+    with st.expander(get_text("about.title", lang)):
+        st.markdown(get_text("about.description", lang))
         st.divider()
-        if st.button("✅ Done selecting - Generate Learning Path", type="primary", use_container_width=True):
-            st.session_state.generating = True
-            st.rerun()
-
-
-# ==================
-# 右栏
-# ==================
-with right:
-
-    # --- Stage 2: Generating report ---
-    if st.session_state.generating:
-        papers = st.session_state.selected_papers
-        if not papers:
-            st.warning("No papers selected.")
-            st.session_state.generating = False
-        else:
-            st.subheader("Generating Learning Path...")
-            progress = st.progress(0, text="Downloading PDFs...")
-
-            progress.progress(20, text="Downloading paper PDFs...")
-            downloaded = batch_download(papers, max_workers=5)
-
-            progress.progress(50, text="AI generating learning path report...")
-            keyword = st.session_state.last_keyword or "Academic Papers"
-            report_md = generate_learning_path_report(downloaded, keyword)
-
-            progress.progress(80, text="Generating PDF report...")
-            pdf_path = save_pdf_report(report_md, "learning_path")
-
-            progress.progress(95, text="Packaging...")
-            zip_path = create_zip(downloaded, pdf_path)
-
-            progress.progress(100, text="Done!")
-
-            st.session_state.generating = False
-            st.session_state.report_ready = True
-            st.session_state.pdf_path = pdf_path
-            st.session_state.zip_path = zip_path
-            st.session_state.report_md = report_md
-            st.session_state.downloaded = downloaded
-            st.rerun()
-
-    # --- Stage 3: Preview + Download / Email ---
-    elif st.session_state.report_ready:
-        st.subheader("Learning Path Report")
-        st.success(f"{len(st.session_state.get('downloaded', []))} papers + PDF report ready")
-
-        # Preview the report
-        with st.expander("Preview Learning Path Report", expanded=True):
-            st.markdown(st.session_state.report_md)
-
+        st.markdown(get_text("about.tech", lang))
         st.divider()
+        st.markdown(get_text("about.github", lang))
+        st.caption(get_text("about.footer", lang))
 
-        # Option A: Download to local
-        st.subheader("Download to Local")
-        st.caption("Click below to download. Your browser will prompt you to choose where to save.")
-        with open(st.session_state.zip_path, "rb") as f:
-            st.download_button(
-                "Download All (Papers + PDF Report)",
-                data=f,
-                file_name=os.path.basename(st.session_state.zip_path),
-                mime="application/zip",
-                use_container_width=True,
-            )
+st.markdown(f"""
+    <div style="margin-bottom:24px;">
+        <h1 style="margin-bottom:4px;">{get_text("app.title", lang)}</h1>
+        <p style="color:#64748b;font-size:0.95rem;margin:0;">{get_text("app.subtitle", lang)}</p>
+    </div>
+""", unsafe_allow_html=True)
 
-        st.divider()
+api_key = os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY") or ""
+if not api_key:
+    with st.container(border=True):
+        st.warning(get_text("api.warning", lang), icon="⚠️")
+        with st.expander(get_text("api.howto_title", lang)):
+            st.code("$env:DEEPSEEK_API_KEY=\"sk-your-key\"  # PowerShell", language="powershell")
+            st.caption(get_text("api.get_key", lang))
 
-        # Option B: Download + Send to email
-        st.subheader("Download & Send to Email")
-        send_email_addr = st.text_input(
-            "Recipient Email", value=EMAIL_RECIPIENT, key="send_email_input",
+tab1, tab2 = st.tabs([get_text("tab.analysis", lang), get_text("tab.history", lang)])
+
+AGENTS = ["planner", "search", "reader", "writer", "reviewer"]
+AGENT_ICONS = {"planner": "📋", "search": "🔍", "reader": "📖", "writer": "✍️", "reviewer": "🔎"}
+
+with tab1:
+    config_col, status_col = st.columns([1, 2], gap="large")
+
+    with config_col:
+        st.markdown(f"### ⚙️ {get_text('config.title', lang)}")
+        direction = st.text_input(
+            get_text("config.keyword_label", lang),
+            placeholder=get_text("config.keyword_placeholder", lang),
+            help=get_text("config.keyword_hint", lang)
         )
-        c_dl, c_send = st.columns(2)
-        with c_dl:
-            with open(st.session_state.zip_path, "rb") as f:
-                st.download_button(
-                    "Download to Local",
-                    data=f,
-                    file_name=os.path.basename(st.session_state.zip_path),
-                    mime="application/zip",
-                    use_container_width=True,
-                    key="dl2",
-                )
-        with c_send:
-            if st.button("Send to Email", type="primary", use_container_width=True):
-                with st.spinner("Sending..."):
-                    kw = st.session_state.last_keyword
-                    n = len(st.session_state.get("downloaded", []))
-                    subject = f"[Learning Path] {kw} ({n} papers)"
-                    html_body = (
-                        f"<h2>Your Learning Path</h2>"
-                        f"<p>Here is your learning path for <b>{kw}</b> with <b>{n} papers</b> and the PDF report.</p>"
-                        f"<p>Happy reading!</p>"
-                        f"<hr><small>Generated by Paper Learning Path Generator</small>"
-                    )
-                    sent, msg = send_email(subject, html_body, st.session_state.zip_path, send_email_addr)
-                    if sent:
-                        st.success(f"Sent: {msg}")
-                        st.balloons()
-                    else:
-                        st.warning(f"Failed: {msg}")
+        uploaded_file = st.file_uploader(
+            get_text("config.file_label", lang),
+            type="pdf",
+            help=get_text("config.file_hint", lang)
+        )
+        st.markdown("<br>", unsafe_allow_html=True)
+        run_btn = st.button(
+            get_text("config.btn_run", lang),
+            type="primary",
+            use_container_width=True,
+        )
 
-        st.divider()
-        if st.button("Start New Search"):
-            for key in list(st.session_state.keys()):
-                st.session_state[key] = DEFAULTS.get(key, [])
-            st.rerun()
+    with status_col:
+        if not run_btn:
+            steps_html = "".join(
+                f"<span class=\"pipeline-step\">{AGENT_ICONS[a]} {a.capitalize()}</span>"
+                for a in AGENTS
+            )
+            st.markdown(f"""
+                <div class="card-empty">
+                    <div style="font-size:3rem;margin-bottom:12px;">🚀</div>
+                    <div style="font-size:1.1rem;font-weight:600;color:#334155;margin-bottom:4px;">
+                        {get_text("progress.title", lang)}
+                    </div>
+                    <div style="font-size:0.85rem;">
+                        {get_text("config.keyword_hint", lang)}
+                    </div>
+                    <div style="margin-top:20px;display:flex;justify-content:center;flex-wrap:wrap;">
+                        {steps_html}
+                    </div>
+                </div>
+            """, unsafe_allow_html=True)
+            progress_placeholder = st.empty()
+        else:
+            progress_placeholder = st.empty()
 
-    # --- Stage 1: Show search results ---
-    elif st.session_state.search_results:
-        st.subheader(f"Search Results - \"{st.session_state.last_keyword}\" ({len(st.session_state.search_results)} papers)")
+    if run_btn:
+        if not direction:
+            st.error(get_text("error.no_keyword", lang))
+        elif not uploaded_file:
+            st.error(get_text("error.no_file", lang))
+        else:
+            issues = validate_config()
+            if issues:
+                for issue in issues:
+                    st.error(get_text(f"validate.{issue}", lang))
+            else:
+                with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                    tmp.write(uploaded_file.read())
+                    pdf_path = tmp.name
+                with st.spinner(""):
+                    pdf_text = parse_pdf(pdf_path)
 
-        selected_ids = {paper_key(p) for p in st.session_state.selected_papers}
+                if not pdf_text or len(pdf_text.strip()) < 100:
+                    st.error(get_text("error.empty_pdf", lang))
+                else:
+                    with progress_placeholder.container():
+                        st.markdown(f"""
+                            <div style="margin-bottom:12px;color:#64748b;font-weight:500;">
+                                {get_text("progress.running", lang)}
+                            </div>
+                        """, unsafe_allow_html=True)
 
-        for i, paper in enumerate(st.session_state.search_results):
-            pid = paper_key(paper)
-            already_selected = pid in selected_ids
+                        progress_bar = st.progress(0, text="")
+                        status_text = st.empty()
 
-            with st.container(border=True):
-                cm, cb = st.columns([6, 1])
-                with cm:
-                    st.markdown(f"### {i+1}. {paper['title']}")
-                    st.caption(
-                        f"Authors: {paper.get('authors', 'N/A')}  |  "
-                        f"Year: {paper.get('year', 'N/A')}  |  "
-                        f"Venue: {paper.get('venue', 'N/A') or 'Unknown'}"
-                    )
-                    auth = infer_authority(paper)
-                    st.caption(f"Authority: {auth}  |  Citations: {paper.get('citation_count', 0)}")
-                    st.markdown(f"{truncate_abstract(paper.get('abstract', ''), 150)}")
-                    aid = paper.get("arxiv_id", "")
-                    if aid:
-                        st.markdown(f"[arXiv: {aid}](https://arxiv.org/abs/{aid})")
-                with cb:
-                    if already_selected:
-                        st.success("Selected")
-                        if st.button("Undo", key=f"desel_{i}"):
-                            st.session_state.selected_papers = [
-                                p for p in st.session_state.selected_papers
-                                if paper_key(p) != pid
-                            ]
-                            st.rerun()
-                    else:
-                        if st.button("+ Select", key=f"sel_{i}"):
-                            st.session_state.selected_papers.append(paper)
-                            st.rerun()
+                        def show_step(step_name, message, pct):
+                            progress_bar.progress(pct, text=message)
 
-    # --- Stage 0: Empty ---
+                        try:
+                            state = {
+                                "research_direction": direction,
+                                "pdf_file_path": pdf_path,
+                                "pdf_text": pdf_text,
+                                "task_plan": [],
+                                "search_keywords": [],
+                                "search_results": [],
+                                "primary_paper": {},
+                                "related_papers_summary": [],
+                                "draft_report": "",
+                                "draft_references": "",
+                                "review_feedback": {},
+                                "final_report": "",
+                                "final_references": "",
+                                "revision_round": 0,
+                                "error": None,
+                                "status_message": "",
+                            }
+
+                            state = planner_agent(state)
+                            show_step("planner", f"📋 {state.get('status_message', '')}", 10)
+
+                            state = search_agent(state)
+                            show_step("search", f"🔍 {state.get('status_message', '')}", 25)
+
+                            state = reader_agent(state)
+                            show_step("reader", f"📖 {state.get('status_message', '')}", 40)
+
+                            state = writer_agent(state)
+                            show_step("writer", f"✍️ {state.get('status_message', '')}", 55)
+
+                            state = reviewer_agent(state)
+                            show_step("reviewer", f"🔎 {state.get('status_message', '')}", 70)
+
+                            rev_round = 0
+                            while state.get("review_feedback", {}).get("needs_revision") and rev_round < 2:
+                                rev_round += 1
+                                state["revision_round"] = rev_round
+                                state = writer_agent(state)
+                                show_step("writer", f"✍️ {get_text('step.writer_revision', lang, round=rev_round)}", 75 + rev_round * 10)
+                                state = reviewer_agent(state)
+                                score = state.get("review_feedback", {}).get("score", "—")
+                                show_step("reviewer", f"🔎 Reviewer: {score}/10", 85 + rev_round * 5)
+
+                            state["final_report"] = state.get("draft_report", "")
+                            state["final_references"] = state.get("draft_references", "")
+                            progress_bar.progress(100, text=get_text("progress.done", lang))
+                            status_text.empty()
+
+                        except Exception as e:
+                            st.error(get_text("error.pipeline", lang, error=e))
+                            st.code(traceback.format_exc())
+                            state = {"final_report": None}
+
+                    if state.get("final_report"):
+                        st.divider()
+
+                        report_md = build_report_markdown(
+                            research_direction=state.get("research_direction", ""),
+                            primary_paper=state.get("primary_paper", {}),
+                            search_results=state.get("search_results", []),
+                            draft_report=state.get("final_report", ""),
+                            draft_references=state.get("final_references", ""),
+                            review_feedback=state.get("review_feedback", {}),
+                        )
+                        filepath = save_markdown_report(report_md)
+
+                        res_left, res_right = st.columns([1, 1], gap="large")
+
+                        with res_left:
+                            st.markdown(f"### 📄 {get_text('results.title', lang)}")
+                            fb = state.get("review_feedback", {})
+                            score = fb.get("score", "—")
+                            st.metric(label=get_text("results.expander_feedback", lang), value=f"{score}/10")
+                            st.download_button(
+                                get_text("results.download_btn", lang),
+                                report_md,
+                                file_name="paper_report.md",
+                                mime="text/markdown",
+                                type="primary",
+                                use_container_width=True,
+                            )
+
+                        with res_right:
+                            with st.container(border=True):
+                                paper = state.get("primary_paper", {})
+                                st.markdown(f"**📝 {paper.get('title', 'Unknown')}**")
+                                st.caption(f"{paper.get('authors', '—')} · {paper.get('year', '—')}")
+                                if paper.get("abstract"):
+                                    st.markdown(paper["abstract"][:400] + ("…" if len(paper.get("abstract", "")) > 400 else ""))
+
+                        with st.expander(get_text("results.expander_review", lang), expanded=True):
+                            st.markdown(state.get("final_report", ""))
+                        with st.expander(get_text("results.expander_refs", lang)):
+                            st.text(state.get("final_references", "—"))
+                        with st.expander(get_text("results.expander_feedback", lang)):
+                            fb = state.get("review_feedback", {})
+                            if fb:
+                                st.metric("Score", f"{fb.get('score', 'N/A')}/10")
+                                for k in ["completeness", "accuracy", "structure", "suggestions"]:
+                                    if fb.get(k):
+                                        st.caption(f"**{k.capitalize()}**: {fb[k]}")
+
+with tab2:
+    st.markdown(f"### 📚 {get_text('history.title', lang)}")
+
+    if os.path.exists(OUTPUT_DIR):
+        files = sorted(os.listdir(OUTPUT_DIR), reverse=True)
+        if files:
+            cols = st.columns(3)
+            for idx, fname in enumerate(files[:30]):
+                fpath = os.path.join(OUTPUT_DIR, fname)
+                with cols[idx % 3]:
+                    with st.container(border=True):
+                        st.markdown(f"📄 **{fname}**")
+                        with open(fpath, "r", encoding="utf-8") as f:
+                            content = f.read()
+                        with st.expander(get_text("history.preview", lang, name="")):
+                            st.markdown(content[:2000])
+                            if len(content) > 2000:
+                                st.caption(get_text("history.truncated", lang))
+        else:
+            st.markdown(f"""
+                <div class="card-empty">
+                    <div style="font-size:2.5rem;">📭</div>
+                    <div style="margin-top:8px;">{get_text("history.empty", lang)}</div>
+                </div>
+            """, unsafe_allow_html=True)
     else:
-        st.info("Enter a keyword on the left and click Search to begin!")
-        with st.expander("How to use"):
-            st.markdown("""
-            1. **Type a keyword** - your research topic or paper title
-            2. **Set search parameters** - result count and time range
-            3. **Browse results** - view title, authors, abstract, authority
-            4. **Select papers** - click [+ Select] to add to your basket
-            5. **Search again** - change keywords, selections accumulate
-            6. **Generate** - click [Done selecting] to create PDF learning path
-            7. **Download or Send** - save locally or email the package
-            """)
+        st.caption(get_text("history.dir_missing", lang))

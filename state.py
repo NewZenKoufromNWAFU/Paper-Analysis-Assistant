@@ -1,64 +1,75 @@
-"""Agent state definitions for the Academic Learning Path System."""
+"""
+LangGraph state definition for the Multi-Agent Paper Analysis System.
+"""
 
-from typing import TypedDict, List, Dict, Optional
+from typing import TypedDict, Annotated, List, Dict, Any, Optional
+from langgraph.graph.message import add_messages
+import operator
 
 
-class PaperMeta(TypedDict, total=False):
-    """Metadata for a downloaded paper."""
+class PaperInfo(TypedDict, total=False):
+    """Structured info extracted from a paper."""
+    title: str
+    authors: str
+    year: str
+    venue: str
+    abstract: str
+    methodology: str
+    contributions: str
+    limitations: str
+    keywords: List[str]
+
+
+class SearchResult(TypedDict, total=False):
+    """Result from academic search."""
     title: str
     authors: str
     year: str
     venue: str
     abstract: str
     url: str
-    arxiv_id: str
     citation_count: int
-    local_path: str
-    page_count: int
 
 
-class RankedPaper(TypedDict, total=False):
-    """A paper with difficulty ranking and learning recommendation."""
-    title: str
-    authors: str
-    year: str
-    arxiv_id: str
-    local_path: str
-    difficulty_score: float
-    difficulty_label: str
-    reason: str
-    learning_goal: str
-    prerequisite: str
-    estimated_hours: float
-    key_sections: str
-    algorithm_improvement: str
-    benchmark_data: str
+class ReviewFeedback(TypedDict, total=False):
+    """Reviewer's feedback on the generated report."""
+    score: float
+    completeness: str
+    accuracy: str
+    structure: str
+    suggestions: str
+    needs_revision: bool
 
 
 class AgentState(TypedDict, total=False):
+    """Shared state flowing through the LangGraph."""
     # Input
-    research_keyword: str
-    email_recipient: str
+    research_direction: str
+    pdf_file_path: Optional[str]
+    pdf_text: Optional[str]
 
     # Planner output
-    search_queries: List[str]
+    task_plan: List[Dict[str, str]]
+    search_keywords: List[str]
 
     # Search output
-    search_results: List[Dict]
-
-    # Downloader output
-    downloaded_papers: List[PaperMeta]
+    search_results: List[SearchResult]
 
     # Reader output
-    paper_analyses: List[Dict]
-
-    # Ranker output
-    ranked_papers: List[RankedPaper]
+    primary_paper: Optional[PaperInfo]
+    related_papers_summary: List[str]
 
     # Writer output
-    learning_path_report: str
-    zip_path: str
+    draft_report: str
+    draft_references: str
+
+    # Reviewer output
+    review_feedback: Optional[ReviewFeedback]
+    final_report: str
+    final_references: str
 
     # Flow control
+    revision_round: int
     error: Optional[str]
     status_message: str
+
