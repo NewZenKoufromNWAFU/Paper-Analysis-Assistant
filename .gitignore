@@ -20,3 +20,4 @@ papers/
 # Virtual environment
 venv/
 .venv/
+users.db
