@@ -1,10 +1,10 @@
+import sys
 import time
+import traceback
 import requests
 import xml.etree.ElementTree as ET
-import sys
-import traceback
 from typing import List, Optional
-from config import MAX_SEARCH_RESULTS
+from config import MAX_SEARCH_RESULTS, SEMSCHOLAR_API_KEY
 
 # --- 权威期刊/会议列表 ---
 TOP_VENUES = {
@@ -21,6 +21,11 @@ TOP_VENUES = {
     "cacm", "ieee transactions on",
 }
 
+# 录用关键词（用于 comments 字段匹配）
+ACCEPTED_KEYWORDS = [
+    "accepted", "published", "oral", "poster", "spotlight",
+    "to appear", "forthcoming", "in press", "accepted at",
+]
 
 def _is_top_venue(venue: str) -> bool:
     if not venue:
@@ -36,44 +41,49 @@ def _paper_key(paper: dict) -> str:
     return (paper.get("arxiv_id") or paper.get("paper_id") or paper.get("title", "")).strip().lower()
 
 
-_S2_API_CALL_INTERVAL = 1.5   # seconds between Semantic Scholar API calls
-_last_s2_call = 0.0           # first call goes immediately
+_S2_CALL_GAP = 1.5       # minimum seconds between Semantic Scholar API calls
+_last_s2_call = 0.0
 
 
-def _fetch_json(url, params):
-    """GET JSON from API with rate-limit guard + exponential backoff."""
+def _fetch_json(url, params, max_attempts=3, api_key=None):
+    """GET JSON with rate-limit guard + exponential backoff + API key support."""
     global _last_s2_call
+    headers = {}
+    if api_key:
+        headers["x-api-key"] = api_key
 
-    # Enforce minimum interval between calls
+    # Enforce minimum interval between API calls (avoids burst 429s)
     now = time.time()
     gap = now - _last_s2_call
-    if gap < _S2_API_CALL_INTERVAL:
-        time.sleep(_S2_API_CALL_INTERVAL - gap)
+    if gap < _S2_CALL_GAP:
+        time.sleep(_S2_CALL_GAP - gap)
     _last_s2_call = time.time()
 
-    for attempt in range(2):
+    for attempt in range(max_attempts):
         try:
-            resp = requests.get(url, params=params, timeout=15)
+            resp = requests.get(url, params=params, headers=headers, timeout=15)
             if resp.status_code == 429:
-                wait = 2 * (2 ** attempt)  # 2, 4 seconds
-                print(f"[INFO] Semantic Scholar 429 rate-limit, waiting {wait}s (attempt {attempt+1}/2)...",
+                wait = 2 * (2 ** attempt)  # exponential backoff: 2s, 4s, 8s
+                print(f"[INFO] Semantic Scholar 429 rate-limited, waiting {wait}s (attempt {attempt+1}/{max_attempts})...",
                       file=sys.stderr)
-                time.sleep(wait)
-                continue
+                if attempt < max_attempts - 1:
+                    time.sleep(wait)
+                    continue
+                return None
             resp.raise_for_status()
             return resp.json()
         except requests.HTTPError as e:
             print(f"[WARNING] Semantic Scholar HTTP {e.response.status_code} (attempt {attempt}): {e}",
                   file=sys.stderr)
-            if attempt < 2:
+            if attempt < max_attempts - 1:
                 time.sleep(1)
                 continue
             return None
         except Exception:
             print(f"[WARNING] Semantic Scholar API error (attempt {attempt}):", file=sys.stderr)
             traceback.print_exc(file=sys.stderr)
-            if attempt < 2:
-                time.sleep(1)
+            if attempt < max_attempts - 1:
+                time.sleep(2)
                 continue
             return None
     return None
@@ -83,7 +93,7 @@ def search_semantic_scholar(query: str, max_results: int = MAX_SEARCH_RESULTS,
                             year_from: Optional[int] = None, year_to: Optional[int] = None,
                             offset: int = 0) -> List[dict]:
     params = {
-        "query": query, "limit": min(max_results, 100), "offset": offset,
+        "query": query, "limit": min(max_results, 50), "offset": offset,
         "fields": "title,authors,year,venue,abstract,url,citationCount,externalIds,publicationVenue,journal",
     }
     if year_from and year_to:
@@ -93,13 +103,12 @@ def search_semantic_scholar(query: str, max_results: int = MAX_SEARCH_RESULTS,
     elif year_to:
         params["year"] = f"1900-{year_to}"
 
-    data = _fetch_json("https://api.semanticscholar.org/graph/v1/paper/search", params)
+    # Use API key if available (free, 10 req/s vs 1 req/s without)
+    api_key = SEMSCHOLAR_API_KEY or None
+    data = _fetch_json("https://api.semanticscholar.org/graph/v1/paper/search", params,
+                       max_attempts=3 if not api_key else 2, api_key=api_key)
     if data is None:
-        print("[WARNING] search_semantic_scholar: API returned None (check error above)", file=sys.stderr)
         return []
-
-    paper_count = len(data.get("data", []))
-    print(f"[INFO] Semantic Scholar returned {paper_count} papers for query '{query[:40]}'", file=sys.stderr)
 
     results = []
     for p in data.get("data", []):
@@ -107,13 +116,11 @@ def search_semantic_scholar(query: str, max_results: int = MAX_SEARCH_RESULTS,
         if p.get("authors") and len(p["authors"]) > 5:
             authors += " et al."
         ext = p.get("externalIds", {}) or {}
-        # Try multiple sources for the real venue name
         venue_raw = p.get("venue", "") or ""
         journal = p.get("journal", {}) or {}
         journal_name = journal.get("name", "") if journal else ""
         pub_venue = p.get("publicationVenue") or {}
         pub_venue_name = pub_venue.get("name", "") if isinstance(pub_venue, dict) else ""
-        # Prefer: publicationVenue name > journal name > venue
         best_venue = pub_venue_name or journal_name or venue_raw or ""
         results.append({
             "title": p.get("title", ""),
@@ -125,16 +132,57 @@ def search_semantic_scholar(query: str, max_results: int = MAX_SEARCH_RESULTS,
             "citation_count": p.get("citationCount", 0) or 0,
             "arxiv_id": ext.get("ArXiv", ""),
             "paper_id": p.get("paperId", ""),
+            "doi": "",
+            "category": "",
+            "comments": "",
+            "journal_ref": "",
         })
     return results
 
 
+# ================================================================
+# arXiv — Layer 1: 解析隐藏字段 (journal-ref / DOI / comments / category)
+# ================================================================
+def _parse_arxiv_hidden_fields(entry, ns) -> dict:
+    """Extract journal-ref, DOI, comments, and arXiv category from a single entry."""
+    hidden = {"journal_ref": "", "doi": "", "comments": "", "category": ""}
+
+    # journal-ref
+    jr = entry.find("arxiv:journal_ref", ns)
+    if jr is not None and jr.text:
+        hidden["journal_ref"] = jr.text.strip()
+
+    # DOI
+    d = entry.find("arxiv:doi", ns)
+    if d is not None and d.text:
+        hidden["doi"] = d.text.strip()
+
+    # comments
+    c = entry.find("arxiv:comment", ns)
+    if c is not None and c.text:
+        hidden["comments"] = c.text.strip()
+
+    # primary category
+    cat = entry.find("arxiv:primary_category", ns)
+    if cat is not None:
+        hidden["category"] = cat.get("term", "")
+
+    return hidden
+
+
+def _check_comments_for_acceptance(comments: str) -> bool:
+    """Check if comments field contains acceptance keywords."""
+    if not comments:
+        return False
+    lower = comments.lower()
+    return any(kw in lower for kw in ACCEPTED_KEYWORDS)
+
+
 def search_arxiv(query: str, max_results: int = MAX_SEARCH_RESULTS,
-                  year_from: Optional[int] = None, year_to: Optional[int] = None,
-                  offset: int = 0) -> List[dict]:
+                  year_from: Optional[int] = None, year_to: Optional[int] = None) -> List[dict]:
     base_url = "http://export.arxiv.org/api/query"
     params = {
-        "search_query": f"all:{query}", "start": offset,
+        "search_query": f"all:{query}", "start": 0,
         "max_results": min(max_results, 50),
         "sortBy": "relevance", "sortOrder": "descending",
     }
@@ -174,6 +222,9 @@ def search_arxiv(query: str, max_results: int = MAX_SEARCH_RESULTS,
         url = lid.text if lid is not None and lid.text else ""
         arxiv_id = url.split("/abs/")[-1] if "/abs/" in url else ""
 
+        # ===== Layer 1: 解析隐藏字段 =====
+        hidden = _parse_arxiv_hidden_fields(entry, ns)
+
         try:
             year_int = int(year_str)
         except ValueError:
@@ -190,9 +241,15 @@ def search_arxiv(query: str, max_results: int = MAX_SEARCH_RESULTS,
             "venue": "arXiv",
             "abstract": abstract,
             "url": url,
-            "citation_count": 0,
+            "citation_count": None,   # arXiv doesn't provide citation counts
             "arxiv_id": arxiv_id,
             "paper_id": "",
+            # Layer 1 fields
+            "doi": hidden["doi"],
+            "category": hidden["category"],
+            "comments": hidden["comments"],
+            "journal_ref": hidden["journal_ref"],
+            "accepted_hint": _check_comments_for_acceptance(hidden["comments"]),
         })
     return results
 
@@ -208,34 +265,50 @@ def search_papers(query: str, count: int = 5,
     fetch_count = max(count * 3 + len(exclude_keys), 20)
 
     sem_results = search_semantic_scholar(query, fetch_count, year_from, year_to, offset)
-    arx_results = search_arxiv(query, fetch_count, year_from, year_to, offset=offset)
+    arx_results = search_arxiv(query, fetch_count, year_from, year_to)
+
+    # Build SemSch index by arxiv_id for enrichment
+    sem_by_aid = {}
+    for r in sem_results:
+        aid = r.get("arxiv_id", "")
+        if aid:
+            sem_by_aid[aid] = r
 
     seen = set()
-    all_merged = []
+    merged = []
     for r in sem_results + arx_results:
         key = _paper_key(r)
         if not key or key in seen or key in exclude_keys:
             continue
         seen.add(key)
-        all_merged.append(r)
 
-    if authoritative_only:
-        # Sort into two tiers 鈥?authoritative papers always first, then remainder as fallback.
-        # This guarantees results are never empty when the hard threshold is too high.
-        authoritative = []
-        non_auth = []
-        for r in all_merged:
+        # Enrich arXiv results with SemSch data (citation count + real venue)
+        aid = r.get("arxiv_id", "")
+        if aid and aid in sem_by_aid:
+            sem = sem_by_aid[aid]
+            # Fill in citation_count if arXiv result has None
+            if r.get("citation_count") is None and sem.get("citation_count"):
+                r["citation_count"] = sem["citation_count"]
+            # Fill in venue if arXiv result just shows "arXiv"
+            sem_venue = sem.get("venue", "")
+            if (not r.get("venue") or r.get("venue") == "arXiv") and sem_venue and sem_venue != "arXiv":
+                r["venue"] = sem_venue
+
+        if authoritative_only:
             venue = r.get("venue", "")
-            cites = r.get("citation_count", 0) or 0
-            if cites >= 50 or _is_top_venue(venue):
-                authoritative.append(r)
+            cites = r.get("citation_count") or 0
+            jr = r.get("journal_ref", "")
+            accepted = r.get("accepted_hint", False)
+            if not venue or venue.lower() == "arxiv":
+                if jr or accepted:
+                    pass
+                else:
+                    pass  # keep arXiv papers
+            elif cites >= 50 or _is_top_venue(venue):
+                pass
             else:
-                non_auth.append(r)
-        authoritative.sort(key=lambda r: r.get("citation_count", 0) or 0, reverse=True)
-        non_auth.sort(key=lambda r: r.get("citation_count", 0) or 0, reverse=True)
-        merged = authoritative + non_auth
-    else:
-        all_merged.sort(key=lambda r: r.get("citation_count", 0) or 0, reverse=True)
-        merged = all_merged
+                continue
+
+        merged.append(r)
 
     return merged[:count]
