@@ -3,6 +3,8 @@ import os
 from datetime import datetime
 from config import EMAIL_RECIPIENT
 from tools.academic_search import search_papers
+from agents.retriever import retrieval_agent
+from state import AgentState
 from tools.paper_downloader import batch_download
 from tools.report_generator import save_html_report
 from tools.email_sender import create_zip, send_email
@@ -19,13 +21,18 @@ def paper_key(paper: dict) -> str:
     return (paper.get("arxiv_id") or paper.get("paper_id") or paper.get("title", "")).strip().lower()
 
 
-def truncate_abstract(text: str, max_chars: int = 300) -> str:
+def truncate_abstract(text: str, max_chars: int = 200) -> str:
     if not text:
         return "(无摘要)"
     text = text.strip().replace("\n", " ")
     if len(text) <= max_chars:
         return text
-    return text[:max_chars].rsplit(" ", 1)[0] + "..."
+    # Search backward from max_chars for a sentence-ending punctuation
+    # so Chinese/English text is cut at a natural boundary, not mid-sentence.
+    for i in range(max_chars - 1, max(0, max_chars - 150), -1):
+        if text[i] in "。！？；.!?;":
+            return text[:i + 1] + "..."
+    return text[:max_chars] + "..."
 
 
 def authority_stars(paper: dict) -> str:
@@ -122,6 +129,7 @@ INIT = {
     "search_offset": 0,
     "search_count": 5,
     "generating": False,
+    "search_mode": "keyword",       # "keyword" or "agent"
     "report_ready": False,
     "html_path": "",
     "zip_path": "",
@@ -158,11 +166,33 @@ left, right = st.columns([1, 2])
 with left:
     st.subheader("🔍 搜索论文")
 
+    search_mode = st.radio(
+        "搜索模式",
+        options=["快速搜索", "深度检索 (AI Agent)"],
+        index=0,
+        horizontal=True,
+        key="search_mode_radio",
+    )
+    st.session_state.search_mode = "agent" if "深度" in search_mode else "keyword"
+
     keyword = st.text_input(
         "关键词 / 论文标题",
         placeholder="例如：Transformer、GNN、Diffusion Model…",
         key="search_keyword",
     )
+
+    research_interest = ""
+    if st.session_state.search_mode == "agent":
+        research_interest = st.text_area(
+            "研究兴趣（自然语言描述）",
+            placeholder=(
+                "用自然语言描述你的研究兴趣，AI Agent 会自动规划搜索策略。\n"
+                "例如：我对图神经网络在分子性质预测中的应用很感兴趣，\n"
+                "尤其关注等变架构（equivariant architectures）的最新进展，\n"
+                "希望能找到相关的综述、经典论文和最新突破。"
+            ),
+            key="research_interest_input",
+        )
 
     search_count = st.slider(
         "每次搜索数量", min_value=1, max_value=10, value=5, step=1,
@@ -199,14 +229,53 @@ with left:
             st.session_state.search_offset = 0
             st.session_state.seen_paper_keys = []
             st.session_state.confirm_new_search = False
-            with st.spinner(f"正在搜索「{keyword}」…"):
-                results = search_papers(
-                    keyword.strip(),
-                    count=search_count,
-                    year_from=year_from,
-                    year_to=year_to,
-                    authoritative_only=True,
-                )
+            if st.session_state.search_mode == "agent" and research_interest.strip():
+                # ── Agent mode: plan → retrieve ──
+                agent_state: AgentState = {
+                    "research_interest": research_interest.strip(),
+                    "research_keyword": keyword.strip() or research_interest.strip()[:30],
+                    "max_total_results": search_count,
+                    "search_results": [],
+                }
+                from agents.planner import planner_agent
+                with st.spinner("AI Agent 正在规划搜索策略…"):
+                    agent_state = planner_agent(agent_state)
+                    plan = agent_state.get("search_plan", {})
+                    st.info(
+                        f"**搜索计划**：{plan.get('core_topic', 'N/A')}\n\n"
+                        + "\n".join(
+                            f"- [{s['type']}] {s['query']} ({s.get('reason','')})"
+                            for s in plan.get("strategies", [])
+                        )
+                    )
+                with st.spinner(f"正在执行 {len(plan.get('strategies',[]))} 条搜索策略…"):
+                    agent_state = retrieval_agent(agent_state)
+                results = agent_state.get("search_results", [])
+                # Warn if every result has 0 citations (all from arXiv — Semantic Scholar down)
+                if results and all(r.get("citation_count", 0) == 0 for r in results):
+                    st.warning(
+                        "⚠️ Semantic Scholar API 请求全部被限速（HTTP 429），"
+                        "当前结果均来自 arXiv，引用数为 0。请等待 30 秒后重试。"
+                    )
+                # Fallback: if agent returned nothing, try keyword mode automatically
+                if not results and keyword.strip():
+                    st.warning("Agent 模式未找到结果，自动回退到关键词快速搜索…")
+                    with st.spinner(f"关键词搜索「{keyword}」…"):
+                        results = search_papers(
+                            keyword.strip(), count=search_count,
+                            year_from=year_from, year_to=year_to,
+                            authoritative_only=True,
+                        )
+            else:
+                # ── Keyword mode (original) ──
+                with st.spinner(f"正在搜索「{keyword}」…"):
+                    results = search_papers(
+                        keyword.strip(),
+                        count=search_count,
+                        year_from=year_from,
+                        year_to=year_to,
+                        authoritative_only=True,
+                    )
             st.session_state.seen_paper_keys = [paper_key(r) for r in results]
             st.session_state.search_results = results
             st.rerun()
@@ -398,7 +467,7 @@ with right:
                     st.caption(
                         f"权威性: {stars}  |  引用: {paper.get('citation_count', 0)} 次"
                     )
-                    st.markdown(truncate_abstract(paper.get("abstract", ""), 300))
+                    st.markdown(truncate_abstract(paper.get("abstract", "")))
                     aid = paper.get("arxiv_id", "")
                     if aid:
                         st.markdown(f"[arXiv: {aid}](https://arxiv.org/abs/{aid})")

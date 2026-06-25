@@ -1,6 +1,8 @@
 import time
 import requests
 import xml.etree.ElementTree as ET
+import sys
+import traceback
 from typing import List, Optional
 from config import MAX_SEARCH_RESULTS
 
@@ -34,20 +36,43 @@ def _paper_key(paper: dict) -> str:
     return (paper.get("arxiv_id") or paper.get("paper_id") or paper.get("title", "")).strip().lower()
 
 
+_S2_API_CALL_INTERVAL = 1.5   # seconds between Semantic Scholar API calls
+_last_s2_call = 0.0           # first call goes immediately
+
+
 def _fetch_json(url, params):
-    """GET JSON from API with timeout + 429 retry. Returns dict or None."""
+    """GET JSON from API with rate-limit guard + exponential backoff."""
+    global _last_s2_call
+
+    # Enforce minimum interval between calls
+    now = time.time()
+    gap = now - _last_s2_call
+    if gap < _S2_API_CALL_INTERVAL:
+        time.sleep(_S2_API_CALL_INTERVAL - gap)
+    _last_s2_call = time.time()
+
     for attempt in range(2):
         try:
             resp = requests.get(url, params=params, timeout=15)
             if resp.status_code == 429:
-                if attempt < 1:
-                    time.sleep(2)
-                    continue
-                return None
+                wait = 2 * (2 ** attempt)  # 2, 4 seconds
+                print(f"[INFO] Semantic Scholar 429 rate-limit, waiting {wait}s (attempt {attempt+1}/2)...",
+                      file=sys.stderr)
+                time.sleep(wait)
+                continue
             resp.raise_for_status()
             return resp.json()
+        except requests.HTTPError as e:
+            print(f"[WARNING] Semantic Scholar HTTP {e.response.status_code} (attempt {attempt}): {e}",
+                  file=sys.stderr)
+            if attempt < 2:
+                time.sleep(1)
+                continue
+            return None
         except Exception:
-            if attempt < 1:
+            print(f"[WARNING] Semantic Scholar API error (attempt {attempt}):", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+            if attempt < 2:
                 time.sleep(1)
                 continue
             return None
@@ -70,7 +95,11 @@ def search_semantic_scholar(query: str, max_results: int = MAX_SEARCH_RESULTS,
 
     data = _fetch_json("https://api.semanticscholar.org/graph/v1/paper/search", params)
     if data is None:
+        print("[WARNING] search_semantic_scholar: API returned None (check error above)", file=sys.stderr)
         return []
+
+    paper_count = len(data.get("data", []))
+    print(f"[INFO] Semantic Scholar returned {paper_count} papers for query '{query[:40]}'", file=sys.stderr)
 
     results = []
     for p in data.get("data", []):
@@ -101,10 +130,11 @@ def search_semantic_scholar(query: str, max_results: int = MAX_SEARCH_RESULTS,
 
 
 def search_arxiv(query: str, max_results: int = MAX_SEARCH_RESULTS,
-                  year_from: Optional[int] = None, year_to: Optional[int] = None) -> List[dict]:
+                  year_from: Optional[int] = None, year_to: Optional[int] = None,
+                  offset: int = 0) -> List[dict]:
     base_url = "http://export.arxiv.org/api/query"
     params = {
-        "search_query": f"all:{query}", "start": 0,
+        "search_query": f"all:{query}", "start": offset,
         "max_results": min(max_results, 50),
         "sortBy": "relevance", "sortOrder": "descending",
     }
@@ -178,26 +208,34 @@ def search_papers(query: str, count: int = 5,
     fetch_count = max(count * 3 + len(exclude_keys), 20)
 
     sem_results = search_semantic_scholar(query, fetch_count, year_from, year_to, offset)
-    arx_results = search_arxiv(query, fetch_count, year_from, year_to)
+    arx_results = search_arxiv(query, fetch_count, year_from, year_to, offset=offset)
 
     seen = set()
-    merged = []
+    all_merged = []
     for r in sem_results + arx_results:
         key = _paper_key(r)
         if not key or key in seen or key in exclude_keys:
             continue
         seen.add(key)
+        all_merged.append(r)
 
-        if authoritative_only:
+    if authoritative_only:
+        # Sort into two tiers 鈥?authoritative papers always first, then remainder as fallback.
+        # This guarantees results are never empty when the hard threshold is too high.
+        authoritative = []
+        non_auth = []
+        for r in all_merged:
             venue = r.get("venue", "")
             cites = r.get("citation_count", 0) or 0
-            if not venue or venue.lower() == "arxiv":
-                pass
-            elif cites >= 50 or _is_top_venue(venue):
-                pass
+            if cites >= 50 or _is_top_venue(venue):
+                authoritative.append(r)
             else:
-                continue
-
-        merged.append(r)
+                non_auth.append(r)
+        authoritative.sort(key=lambda r: r.get("citation_count", 0) or 0, reverse=True)
+        non_auth.sort(key=lambda r: r.get("citation_count", 0) or 0, reverse=True)
+        merged = authoritative + non_auth
+    else:
+        all_merged.sort(key=lambda r: r.get("citation_count", 0) or 0, reverse=True)
+        merged = all_merged
 
     return merged[:count]

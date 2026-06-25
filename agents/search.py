@@ -24,8 +24,10 @@ def search_agent(state: AgentState) -> AgentState:
     except:
         pass
     # Prioritize papers with arxiv_id so they can be downloaded
-    with_id = [r for r in all_results if r.get("arxiv_id")]
-    without_id = [r for r in all_results if not r.get("arxiv_id")]
-    state["search_results"] = (with_id + without_id)[:18]
-    state["status_message"] = f"[Search] Found {len(state['search_results'])} papers, {len(with_id)} downloadable"
+    all_results.sort(
+        key=lambda r: (-(r.get("citation_count", 0) or 0), 0 if r.get("arxiv_id") else 1),
+    )
+    state["search_results"] = all_results[:18]
+    downloadable = sum(1 for r in all_results[:18] if r.get("arxiv_id"))
+    state["status_message"] = f"[Search] Found {len(state['search_results'])} papers, {downloadable} downloadable"
     return state
