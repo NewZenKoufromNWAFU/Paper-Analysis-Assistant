@@ -20,6 +20,11 @@ def _conn():
 def init_db():
     """Create tables if they don't exist."""
     db = _conn()
+    # Add role column if upgrading from old schema
+    try:
+        db.execute("ALTER TABLE users ADD COLUMN role TEXT DEFAULT ''")
+    except sqlite3.OperationalError:
+        pass
     db.executescript("""
         CREATE TABLE IF NOT EXISTS users (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -27,6 +32,7 @@ def init_db():
             email         TEXT UNIQUE,
             password_hash TEXT NOT NULL,
             nickname      TEXT DEFAULT '',
+            role          TEXT DEFAULT '',
             created_at    TEXT DEFAULT (datetime('now')),
             last_login    TEXT DEFAULT (datetime('now'))
         );
@@ -175,6 +181,23 @@ def bind_email(user_id: int, email: str) -> tuple:
         return True, "邮箱绑定成功"
     except Exception as e:
         return False, f"绑定失败: {e}"
+    finally:
+        db.close()
+
+
+def update_profile(user_id: int, nickname: str = "", role: str = "") -> tuple:
+    """Update user nickname and academic role."""
+    db = _conn()
+    try:
+        if nickname:
+            db.execute("UPDATE users SET nickname=? WHERE id=?", (nickname, user_id))
+        if role:
+            db.execute("UPDATE users SET role=? WHERE id=?", (role, user_id))
+        db.commit()
+        u = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+        return True, "个人信息已更新", dict(u)
+    except Exception as e:
+        return False, f"更新失败: {e}", None
     finally:
         db.close()
 

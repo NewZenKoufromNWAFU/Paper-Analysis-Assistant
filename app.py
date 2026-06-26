@@ -8,7 +8,7 @@ from tools.report_generator import save_html_report
 from tools.email_sender import create_zip, send_email
 from tools.paper_validator import batch_enrich, paper_tags
 from tools.auth import (
-    register, login, bind_email,
+    register, login, bind_email, update_profile,
     save_search_history, get_search_history,
     save_report, get_reports,
     subscribe, unsubscribe, get_subscriptions,
@@ -39,6 +39,7 @@ INIT_MAIN = {
     "search_count": 5,
     "search_mode": "keyword",       # "keyword" or "agent"
     "generating": False,
+    "download_only": False,
     "report_ready": False,
     "html_path": "",
     "zip_path": "",
@@ -140,8 +141,15 @@ if st.session_state.page == "login":
             st.subheader("注册新账号")
             reg_acc = st.text_input("手机号（或邮箱）", key="reg_acc", placeholder="请输入手机号或邮箱")
             reg_pw = st.text_input("设置密码 (6位以上)", type="password", key="reg_pw")
+            reg_role = st.selectbox("学术身份（可选，有助于精准推荐论文）",
+                                     options=["暂不选择", "本科", "硕士", "博士", "博士后", "教师/研究员"],
+                                     index=0, key="reg_role")
             if st.button("注册", type="primary", use_container_width=True):
                 ok, msg, user = register(reg_acc, reg_pw)
+                if ok and reg_role != "暂不选择":
+                    update_profile(user["id"], role=reg_role)
+                    user["role"] = reg_role
+                    st.session_state.user = user
                 if ok:
                     st.session_state.user = user
                     st.session_state.page = "main"
@@ -165,23 +173,48 @@ is_guest = user is None
 
 # ---- 顶部用户栏 ----
 with st.container():
-    cu1, cu2, cu3, cu4 = st.columns([4, 1, 1, 1])
+    cu1, cu2, cu3, cu4, cu5 = st.columns([3, 1, 1, 1, 1])
     with cu1:
         if is_guest:
             st.markdown("👤 **游客模式** — 搜索和报告不会被保存")
         else:
             nn = user.get("nickname", "") or user.get("phone", "") or user.get("email", "") or "用户"
-            st.markdown(f"👤 **{nn}**  |  📱 {user.get('phone','未绑定')}  |  📧 {user.get('email','未绑定')}")
+            role = user.get("role", "")
+            role_text = f"🎓 {role}" if role else ""
+            st.markdown(f"👤 **{nn}** {role_text} | 📱 {user.get('phone','未绑定')} | 📧 {user.get('email','未绑定')}")
     with cu2:
-        if not is_guest and st.button("📋 历史记录", use_container_width=True):
-            st.session_state.show_history = not st.session_state.get("show_history", False)
-    with cu3:
         if not is_guest and not user.get("email") and st.button("📧 绑定邮箱", use_container_width=True):
             st.session_state.show_bind_email = True
+    with cu3:
+        if not is_guest and st.button("✏️ 个人信息", use_container_width=True):
+            st.session_state.show_profile = not st.session_state.get("show_profile", False)
     with cu4:
+        if not is_guest and st.button("📋 历史", use_container_width=True):
+            st.session_state.show_history = not st.session_state.get("show_history", False)
+    with cu5:
         if not is_guest:
             if st.button("🚪 退出", use_container_width=True):
                 logout()
+
+# ---- 个人信息编辑 ----
+if st.session_state.get("show_profile") and not is_guest:
+    with st.expander("✏️ 编辑个人信息", expanded=True):
+        new_nick = st.text_input("用户名", value=user.get("nickname", ""), key="edit_nick")
+        new_role = st.selectbox("学术身份", options=["", "本科", "硕士", "博士", "博士后", "教师/研究员"],
+                                index=(["", "本科", "硕士", "博士", "博士后", "教师/研究员"].index(user.get("role", "")) if user.get("role", "") in ["本科", "硕士", "博士", "博士后", "教师/研究员"] else 0),
+                                key="edit_role")
+        c_save, c_close = st.columns(2)
+        with c_save:
+            if st.button("保存", use_container_width=True):
+                ok, msg, updated = update_profile(user["id"], nickname=new_nick, role=new_role)
+                if ok:
+                    st.session_state.user = updated
+                    st.success(msg); st.rerun()
+                else:
+                    st.error(msg)
+        with c_close:
+            if st.button("关闭", use_container_width=True):
+                st.session_state.show_profile = False; st.rerun()
 
 # ---- 绑定邮箱弹窗 ----
 if st.session_state.show_bind_email and not is_guest:
@@ -348,13 +381,24 @@ with left:
                 if st.button("❌", key=f"remove_{i}"):
                     st.session_state.selected_papers.pop(i); st.rerun()
 
-    # 生成按钮
+    # 生成 / 仅下载 按钮
     if len(st.session_state.selected_papers) > 0:
         st.divider()
-        if st.button("✅ 完成选择，生成学习路径", type="primary", use_container_width=True):
-            st.session_state.generating = True
-            st.session_state.confirm_new_search = False
-            st.rerun()
+        cg, cd = st.columns(2)
+        with cg:
+            if st.button("✅ 生成学习路径", type="primary", use_container_width=True,
+                         help="下载论文 + AI生成学习路径报告"):
+                st.session_state.generating = True
+                st.session_state.download_only = False
+                st.session_state.confirm_new_search = False
+                st.rerun()
+        with cd:
+            if st.button("📥 仅下载论文", use_container_width=True,
+                         help="仅下载已选论文，不生成报告"):
+                st.session_state.generating = True
+                st.session_state.download_only = True
+                st.session_state.confirm_new_search = False
+                st.rerun()
 
     # 订阅按钮（注册用户且已绑定邮箱）
     if not is_guest and user.get("email"):
@@ -395,47 +439,68 @@ with right:
             if st.button("取消", use_container_width=True):
                 st.session_state.confirm_new_search = False; st.rerun()
 
-    # 阶段 2：生成报告
+    # 阶段 2：生成报告 / 仅下载
     elif st.session_state.generating:
         papers = st.session_state.selected_papers
         if not papers:
             st.warning("没有已选论文"); st.session_state.generating = False
         else:
-            st.subheader("正在生成学习路径…")
-            progress = st.progress(0, text="准备中…")
-            progress.progress(20, text="正在下载论文 PDF…")
-            downloaded = batch_download(papers, max_workers=5)
-            progress.progress(50, text="AI 正在撰写学习路径报告…")
-            kw = st.session_state.last_keyword or "学术论文"
-            report_md = generate_learning_path_report(downloaded, kw)
-            progress.progress(80, text="正在生成 HTML 报告…")
-            html_path = save_html_report(report_md, "learning_path")
-            progress.progress(95, text="正在打包…")
-            zip_path = create_zip(downloaded, html_path)
-            progress.progress(100, text="完成！")
-            st.session_state.generating = False
-            st.session_state.report_ready = True
-            st.session_state.html_path = html_path
-            st.session_state.zip_path = zip_path
-            st.session_state.report_md = report_md
-            st.session_state.downloaded = downloaded
-            if not is_guest:
-                save_report(user["id"], kw, html_path, zip_path, len(downloaded))
+            dl_only = st.session_state.download_only
+            if dl_only:
+                st.subheader("正在下载论文…")
+                progress = st.progress(0, text="下载中…")
+                progress.progress(50, text="正在下载论文 PDF…")
+                downloaded = batch_download(papers, max_workers=5)
+                progress.progress(90, text="正在打包…")
+                zip_path = create_zip(downloaded, None)
+                progress.progress(100, text="完成！")
+                st.session_state.generating = False
+                st.session_state.report_ready = True
+                st.session_state.html_path = ""
+                st.session_state.zip_path = zip_path
+                st.session_state.report_md = ""
+                st.session_state.downloaded = downloaded
+            else:
+                st.subheader("正在生成学习路径…")
+                progress = st.progress(0, text="准备中…")
+                progress.progress(20, text="正在下载论文 PDF…")
+                downloaded = batch_download(papers, max_workers=5)
+                progress.progress(50, text="AI 正在撰写学习路径报告…")
+                kw = st.session_state.last_keyword or "学术论文"
+                report_md = generate_learning_path_report(downloaded, kw)
+                progress.progress(80, text="正在生成 HTML 报告…")
+                html_path = save_html_report(report_md, "learning_path")
+                progress.progress(95, text="正在打包…")
+                zip_path = create_zip(downloaded, html_path)
+                progress.progress(100, text="完成！")
+                st.session_state.generating = False
+                st.session_state.report_ready = True
+                st.session_state.html_path = html_path
+                st.session_state.zip_path = zip_path
+                st.session_state.report_md = report_md
+                st.session_state.downloaded = downloaded
+                if not is_guest:
+                    save_report(user["id"], kw, html_path, zip_path, len(downloaded))
             st.rerun()
 
     # 阶段 3：预览 + 下载 / 发送
     elif st.session_state.report_ready:
-        st.subheader("学习路径已生成！")
         n = len(st.session_state.get("downloaded", []))
-        st.success(f"共 {n} 篇论文 + 1 份 HTML 学习路径报告")
-        with st.expander("预览学习路径报告", expanded=True):
-            st.markdown(st.session_state.report_md)
+        if st.session_state.report_md:
+            st.subheader("学习路径已生成！")
+            st.success(f"共 {n} 篇论文 + 1 份 HTML 学习路径报告")
+            with st.expander("预览学习路径报告", expanded=True):
+                st.markdown(st.session_state.report_md)
+        else:
+            st.subheader("论文下载完成！")
+            st.success(f"共 {n} 篇论文已打包")
         st.divider()
         st.subheader("下载 & 发送邮箱")
         c_dl, c_send = st.columns(2)
         with c_dl:
             with open(st.session_state.zip_path, "rb") as f:
-                st.download_button("下载全部（论文 + HTML 报告）", data=f,
+                label = "下载全部（论文 + HTML 报告）" if st.session_state.report_md else "下载论文 zip 包"
+                st.download_button(label, data=f,
                                    file_name=os.path.basename(st.session_state.zip_path),
                                    mime="application/zip", use_container_width=True)
         with c_send:
@@ -471,19 +536,31 @@ with right:
                 cm, cb = st.columns([6, 1])
                 with cm:
                     st.markdown(f"### {i+1}. {paper['title']}")
+                    # --- 期刊 + 引用数突出显示 ---
                     real_v = paper.get("real_venue", "") or paper.get("venue", "N/A")
                     real_src = paper.get("venue_source", "")
                     src_hint = f" [{real_src}]" if real_src and real_src != "category-whitelist" else ""
-                    st.caption(f"作者: {paper.get('authors', 'N/A')}  |  年份: {paper.get('real_year', paper.get('year', 'N/A'))}  |  期刊: {real_v}{src_hint}")
-                    tags = paper_tags(paper); tag_text = " | ".join(tags)
                     cites = paper.get("citation_count")
-                    if cites is not None and cites > 0: st.caption(f"引用: {cites} 次")
-                    elif cites is not None: st.caption(f"引用: {cites} 次")
-                    else: st.caption("引用: 暂无数据 (仅arXiv)")
-                    if tag_text: st.caption(tag_text)
-                    st.markdown(truncate_abstract(paper.get("abstract", ""), 300))
+                    if cites is not None and cites > 0:
+                        cite_text = f"📊 **引用: {cites:,} 次**"
+                    elif cites is not None and cites == 0:
+                        cite_text = "📊 引用: 0 次"
+                    else:
+                        cite_text = "📊 引用: 暂无数据"
+                    st.markdown(f"🏛 **{real_v}**{src_hint}  |  {cite_text}  |  📅 {paper.get('real_year', paper.get('year', 'N/A'))}")
+                    st.caption(f"✍ {paper.get('authors', 'N/A')}")
+                    # 标签
+                    tags = paper_tags(paper)
+                    if tags: st.caption(" | ".join(tags))
+                    # --- 摘要折叠 ---
+                    abstract = paper.get("abstract", "")
+                    if abstract:
+                        with st.expander(f"📝 摘要 ({len(abstract)} 字)"):
+                            st.markdown(abstract)
+                    else:
+                        st.caption("(无摘要)")
                     aid = paper.get("arxiv_id", "")
-                    if aid: st.markdown(f"[arXiv: {aid}](https://arxiv.org/abs/{aid})")
+                    if aid: st.markdown(f"[📎 arXiv: {aid}](https://arxiv.org/abs/{aid})")
                 with cb:
                     if selected:
                         st.success("已选")

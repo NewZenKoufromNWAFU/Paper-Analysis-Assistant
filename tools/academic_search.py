@@ -265,7 +265,11 @@ def search_papers(query: str, count: int = 5,
     fetch_count = max(count * 3 + len(exclude_keys), 20)
 
     sem_results = search_semantic_scholar(query, fetch_count, year_from, year_to, offset)
-    arx_results = search_arxiv(query, fetch_count, year_from, year_to)
+    # Only fetch arXiv if SemSch didn't return enough
+    if len(sem_results) < count * 2:
+        arx_results = search_arxiv(query, fetch_count, year_from, year_to)
+    else:
+        arx_results = []
 
     # Build SemSch index by arxiv_id for enrichment
     sem_by_aid = {}
@@ -274,6 +278,7 @@ def search_papers(query: str, count: int = 5,
         if aid:
             sem_by_aid[aid] = r
 
+    # Smart merge: SemSch papers first (have real data), arXiv as fallback
     seen = set()
     merged = []
     for r in sem_results + arx_results:
@@ -282,14 +287,12 @@ def search_papers(query: str, count: int = 5,
             continue
         seen.add(key)
 
-        # Enrich arXiv results with SemSch data (citation count + real venue)
+        # Enrich arXiv results with SemSch data
         aid = r.get("arxiv_id", "")
         if aid and aid in sem_by_aid:
             sem = sem_by_aid[aid]
-            # Fill in citation_count if arXiv result has None
             if r.get("citation_count") is None and sem.get("citation_count"):
                 r["citation_count"] = sem["citation_count"]
-            # Fill in venue if arXiv result just shows "arXiv"
             sem_venue = sem.get("venue", "")
             if (not r.get("venue") or r.get("venue") == "arXiv") and sem_venue and sem_venue != "arXiv":
                 r["venue"] = sem_venue
@@ -299,15 +302,15 @@ def search_papers(query: str, count: int = 5,
             cites = r.get("citation_count") or 0
             jr = r.get("journal_ref", "")
             accepted = r.get("accepted_hint", False)
-            if not venue or venue.lower() == "arxiv":
-                if jr or accepted:
+            # Keep: top venues, papers with real citations, accepted arXiv, or real journal-ref
+            if _is_top_venue(venue) or cites >= 10 or accepted or jr:
+                pass
+            elif cites is None or cites == 0:
+                # Paper with absolutely no data — still keep if it at least has a real venue
+                if venue and venue.lower() != "arxiv":
                     pass
                 else:
-                    pass  # keep arXiv papers
-            elif cites >= 50 or _is_top_venue(venue):
-                pass
-            else:
-                continue
+                    continue
 
         merged.append(r)
 
