@@ -280,7 +280,8 @@ with left:
                 st.session_state.seen_paper_keys = []
                 st.session_state.confirm_new_search = False
                 with st.spinner("AI Agent 正在规划搜索策略…"):
-                    state = planner_agent({"research_interest": interest, "research_keyword": keyword.strip() or interest[:40], "search_results": []})
+                    state = planner_agent({"research_interest": interest, "research_keyword": keyword.strip() or interest[:40], "search_results": [], "max_total_results": search_count})
+                    state["max_total_results"] = search_count
                     state = retrieval_agent(state)
                 results = state.get("search_results", [])
                 st.session_state.seen_paper_keys = [paper_key(r) for r in results]
