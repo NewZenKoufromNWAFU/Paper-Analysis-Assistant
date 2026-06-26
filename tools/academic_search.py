@@ -41,51 +41,38 @@ def _paper_key(paper: dict) -> str:
     return (paper.get("arxiv_id") or paper.get("paper_id") or paper.get("title", "")).strip().lower()
 
 
-_S2_CALL_GAP = 1.5       # minimum seconds between Semantic Scholar API calls
-_last_s2_call = 0.0
-
-
-def _fetch_json(url, params, max_attempts=3, api_key=None):
-    """GET JSON with rate-limit guard + exponential backoff + API key support."""
-    global _last_s2_call
-    headers = {}
-    if api_key:
-        headers["x-api-key"] = api_key
-
-    # Enforce minimum interval between API calls (avoids burst 429s)
-    now = time.time()
-    gap = now - _last_s2_call
-    if gap < _S2_CALL_GAP:
-        time.sleep(_S2_CALL_GAP - gap)
-    _last_s2_call = time.time()
-
+def _fetch_json(url, params, max_attempts=2, api_key=None):
+    """GET JSON with API key + simple retry. Falls back to no-key if key is bad."""
     for attempt in range(max_attempts):
+        headers = {}
+        if api_key and attempt < max_attempts - 1:
+            headers["x-api-key"] = api_key
+        # If key caused 500, retry without it
         try:
             resp = requests.get(url, params=params, headers=headers, timeout=15)
+            if resp.status_code == 500 or resp.status_code == 403:
+                # Invalid key — retry without key
+                if api_key and attempt < max_attempts - 1:
+                    api_key = None  # disable key for next attempt
+                    time.sleep(1)
+                    continue
             if resp.status_code == 429:
-                wait = 2 * (2 ** attempt)  # exponential backoff: 2s, 4s, 8s
-                print(f"[INFO] Semantic Scholar 429 rate-limited, waiting {wait}s (attempt {attempt+1}/{max_attempts})...",
-                      file=sys.stderr)
+                wait = 3 + attempt * 5
+                print(f"[INFO] S2 429, waiting {wait}s (attempt {attempt+1}/{max_attempts})...", file=sys.stderr)
                 if attempt < max_attempts - 1:
                     time.sleep(wait)
                     continue
-                return None
             resp.raise_for_status()
             return resp.json()
-        except requests.HTTPError as e:
-            print(f"[WARNING] Semantic Scholar HTTP {e.response.status_code} (attempt {attempt}): {e}",
-                  file=sys.stderr)
-            if attempt < max_attempts - 1:
-                time.sleep(1)
-                continue
-            return None
-        except Exception:
-            print(f"[WARNING] Semantic Scholar API error (attempt {attempt}):", file=sys.stderr)
-            traceback.print_exc(file=sys.stderr)
+        except requests.HTTPError:
             if attempt < max_attempts - 1:
                 time.sleep(2)
                 continue
-            return None
+        except Exception:
+            traceback.print_exc(file=sys.stderr)
+            if attempt < max_attempts - 1:
+                time.sleep(1)
+                continue
     return None
 
 
@@ -106,7 +93,7 @@ def search_semantic_scholar(query: str, max_results: int = MAX_SEARCH_RESULTS,
     # Use API key if available (free, 10 req/s vs 1 req/s without)
     api_key = SEMSCHOLAR_API_KEY or None
     data = _fetch_json("https://api.semanticscholar.org/graph/v1/paper/search", params,
-                       max_attempts=3 if not api_key else 2, api_key=api_key)
+                       max_attempts=3, api_key=api_key)
     if data is None:
         return []
 
@@ -125,7 +112,7 @@ def search_semantic_scholar(query: str, max_results: int = MAX_SEARCH_RESULTS,
         results.append({
             "title": p.get("title", ""),
             "authors": authors,
-            "year": str(p.get("year", "")),
+            "year": str(p.get("year")) if p.get("year") else "",
             "venue": best_venue,
             "abstract": p.get("abstract", "") or "",
             "url": p.get("url", ""),

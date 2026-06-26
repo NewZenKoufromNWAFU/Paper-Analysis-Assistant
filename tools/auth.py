@@ -2,9 +2,7 @@
 import os
 import re
 import sqlite3
-import hashlib
 import bcrypt
-from datetime import datetime
 from config import BASE_DIR
 
 DB_PATH = os.path.join(BASE_DIR, "users.db")
@@ -18,30 +16,24 @@ def _conn():
 
 
 def init_db():
-    """Create tables if they don't exist."""
-    db = _conn()
-    # Add role column if upgrading from old schema
-    try:
-        db.execute("ALTER TABLE users ADD COLUMN role TEXT DEFAULT ''")
-    except sqlite3.OperationalError:
-        pass
-    db.executescript("""
+    sql = """
         CREATE TABLE IF NOT EXISTS users (
             id            INTEGER PRIMARY KEY AUTOINCREMENT,
-            phone         TEXT UNIQUE,
-            email         TEXT UNIQUE,
+            username      TEXT UNIQUE,
+            phone         TEXT DEFAULT '',
+            email         TEXT NOT NULL,
             password_hash TEXT NOT NULL,
             nickname      TEXT DEFAULT '',
             role          TEXT DEFAULT '',
-            created_at    TEXT DEFAULT (datetime('now')),
-            last_login    TEXT DEFAULT (datetime('now'))
+            created_at    TEXT DEFAULT (datetime('now','localtime')),
+            last_login    TEXT DEFAULT (datetime('now','localtime'))
         );
         CREATE TABLE IF NOT EXISTS search_history (
             id         INTEGER PRIMARY KEY AUTOINCREMENT,
             user_id    INTEGER NOT NULL,
             keyword    TEXT NOT NULL,
-            results    TEXT,          -- JSON of paper list
-            created_at TEXT DEFAULT (datetime('now')),
+            results    TEXT,
+            created_at TEXT DEFAULT (datetime('now','localtime')),
             FOREIGN KEY (user_id) REFERENCES users(id)
         );
         CREATE TABLE IF NOT EXISTS reports (
@@ -51,7 +43,7 @@ def init_db():
             html_path  TEXT,
             zip_path   TEXT,
             paper_count INTEGER DEFAULT 0,
-            created_at TEXT DEFAULT (datetime('now')),
+            created_at TEXT DEFAULT (datetime('now','localtime')),
             FOREIGN KEY (user_id) REFERENCES users(id)
         );
         CREATE TABLE IF NOT EXISTS subscriptions (
@@ -60,10 +52,12 @@ def init_db():
             keyword    TEXT NOT NULL,
             active     INTEGER DEFAULT 1,
             last_checked TEXT,
-            created_at TEXT DEFAULT (datetime('now')),
+            created_at TEXT DEFAULT (datetime('now','localtime')),
             FOREIGN KEY (user_id) REFERENCES users(id)
         );
-    """)
+    """
+    db = _conn()
+    db.executescript(sql)
     db.commit()
     db.close()
 
@@ -71,59 +65,45 @@ def init_db():
 # ============================================================
 # User CRUD
 # ============================================================
-def _hash_pw(password: str) -> str:
-    return bcrypt.hashpw(password.encode(), bcrypt.gensalt()).decode()
+def _hash_pw(pw: str) -> str:
+    return bcrypt.hashpw(pw.encode(), bcrypt.gensalt()).decode()
 
-
-def _check_pw(password: str, hashed: str) -> bool:
-    return bcrypt.checkpw(password.encode(), hashed.encode())
-
-
-def _is_phone(s: str) -> bool:
-    return bool(re.match(r'^1[3-9]\d{9}$', s))
-
+def _check_pw(pw: str, hashed: str) -> bool:
+    return bcrypt.checkpw(pw.encode(), hashed.encode())
 
 def _is_email(s: str) -> bool:
     return bool(re.match(r'^[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}$', s))
 
 
-def register(account: str, password: str, nickname: str = "") -> tuple:
-    """Register a new user. account can be phone or email.
-
-    Returns (success: bool, message: str, user: dict|None)
+def register(username: str, email: str, password: str, role: str = "") -> tuple:
+    """Register: username + email + password (all required).
+    Returns (success, message, user|None).
     """
-    account = account.strip()
-    if not account or not password:
-        return False, "账号和密码不能为空", None
+    username = username.strip()
+    email = email.strip()
+    if not username or not email or not password:
+        return False, "用户名、邮箱、密码不能为空", None
+    if len(username) < 2:
+        return False, "用户名至少 2 位", None
     if len(password) < 6:
         return False, "密码至少 6 位", None
-
-    is_p = _is_phone(account)
-    is_e = _is_email(account)
-    if not is_p and not is_e:
-        return False, "请输入有效的手机号或邮箱", None
+    if not _is_email(email):
+        return False, "邮箱格式不正确", None
 
     db = _conn()
     try:
-        existing = db.execute(
-            "SELECT id FROM users WHERE phone=? OR email=?", (account, account)
-        ).fetchone()
-        if existing:
-            return False, "该账号已被注册", None
+        if db.execute("SELECT id FROM users WHERE username=?", (username,)).fetchone():
+            return False, "该用户名已被注册", None
+        if db.execute("SELECT id FROM users WHERE email=?", (email,)).fetchone():
+            return False, "该邮箱已被注册", None
 
         h = _hash_pw(password)
-        if is_p:
-            db.execute(
-                "INSERT INTO users (phone, password_hash, nickname) VALUES (?,?,?)",
-                (account, h, nickname or f"用户{account[-4:]}"),
-            )
-        else:
-            db.execute(
-                "INSERT INTO users (email, password_hash, nickname) VALUES (?,?,?)",
-                (account, h, nickname or account.split("@")[0]),
-            )
+        db.execute(
+            "INSERT INTO users (username, email, password_hash, nickname, role) VALUES (?,?,?,?,?)",
+            (username, email, h, username, role),
+        )
         db.commit()
-        user = db.execute("SELECT * FROM users WHERE phone=? OR email=?", (account, account)).fetchone()
+        user = db.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
         return True, "注册成功", dict(user)
     except Exception as e:
         return False, f"注册失败: {e}", None
@@ -131,25 +111,22 @@ def register(account: str, password: str, nickname: str = "") -> tuple:
         db.close()
 
 
-def login(account: str, password: str) -> tuple:
-    """Login with phone or email + password.
-
-    Returns (success, message, user_dict|None)
+def login(username: str, password: str) -> tuple:
+    """Login: username + password.
+    Returns (success, message, user|None).
     """
-    account = account.strip()
-    if not account or not password:
-        return False, "账号和密码不能为空", None
+    username = username.strip()
+    if not username or not password:
+        return False, "用户名和密码不能为空", None
 
     db = _conn()
     try:
-        user = db.execute(
-            "SELECT * FROM users WHERE phone=? OR email=?", (account, account)
-        ).fetchone()
+        user = db.execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
         if not user:
-            return False, "账号不存在", None
+            return False, "用户名不存在", None
         if not _check_pw(password, user["password_hash"]):
             return False, "密码错误", None
-        db.execute("UPDATE users SET last_login=datetime('now') WHERE id=?", (user["id"],))
+        db.execute("UPDATE users SET last_login=datetime('now','localtime') WHERE id=?", (user["id"],))
         db.commit()
         return True, "登录成功", dict(user)
     except Exception as e:
@@ -158,44 +135,22 @@ def login(account: str, password: str) -> tuple:
         db.close()
 
 
-def get_user(user_id: int) -> dict | None:
-    db = _conn()
-    try:
-        u = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
-        return dict(u) if u else None
-    finally:
-        db.close()
-
-
-def bind_email(user_id: int, email: str) -> tuple:
-    """Bind an email to an existing user."""
-    if not _is_email(email):
-        return False, "邮箱格式不正确"
-    db = _conn()
-    try:
-        existing = db.execute("SELECT id FROM users WHERE email=?", (email,)).fetchone()
-        if existing and existing["id"] != user_id:
-            return False, "该邮箱已被其他账号绑定"
-        db.execute("UPDATE users SET email=? WHERE id=?", (email, user_id))
-        db.commit()
-        return True, "邮箱绑定成功"
-    except Exception as e:
-        return False, f"绑定失败: {e}"
-    finally:
-        db.close()
-
-
-def update_profile(user_id: int, nickname: str = "", role: str = "") -> tuple:
-    """Update user nickname and academic role."""
+def update_profile(user_id: int, nickname: str = "", role: str = "", email: str = "") -> tuple:
+    """Update user profile fields."""
     db = _conn()
     try:
         if nickname:
             db.execute("UPDATE users SET nickname=? WHERE id=?", (nickname, user_id))
         if role:
             db.execute("UPDATE users SET role=? WHERE id=?", (role, user_id))
+        if email and _is_email(email):
+            existing = db.execute("SELECT id FROM users WHERE email=? AND id!=?", (email, user_id)).fetchone()
+            if existing:
+                return False, "该邮箱已被其他账号使用", None
+            db.execute("UPDATE users SET email=? WHERE id=?", (email, user_id))
         db.commit()
         u = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
-        return True, "个人信息已更新", dict(u)
+        return True, "已更新", dict(u)
     except Exception as e:
         return False, f"更新失败: {e}", None
     finally:
@@ -209,12 +164,11 @@ def save_search_history(user_id: int, keyword: str, results: list):
     import json
     db = _conn()
     try:
-        # keep last 50 searches per user
         cnt = db.execute("SELECT COUNT(*) FROM search_history WHERE user_id=?", (user_id,)).fetchone()[0]
-        if cnt >= 50:
+        if cnt >= 20:
             db.execute(
                 "DELETE FROM search_history WHERE id IN (SELECT id FROM search_history WHERE user_id=? ORDER BY created_at ASC LIMIT ?)",
-                (user_id, cnt - 49),
+                (user_id, cnt - 19),
             )
         db.execute(
             "INSERT INTO search_history (user_id, keyword, results) VALUES (?,?,?)",
@@ -243,6 +197,13 @@ def get_search_history(user_id: int, limit: int = 20) -> list:
 def save_report(user_id: int, keyword: str, html_path: str, zip_path: str, paper_count: int):
     db = _conn()
     try:
+        # Keep only last 10 reports
+        cnt = db.execute("SELECT COUNT(*) FROM reports WHERE user_id=?", (user_id,)).fetchone()[0]
+        if cnt >= 10:
+            db.execute(
+                "DELETE FROM reports WHERE id IN (SELECT id FROM reports WHERE user_id=? ORDER BY created_at ASC LIMIT ?)",
+                (user_id, cnt - 9),
+            )
         db.execute(
             "INSERT INTO reports (user_id, keyword, html_path, zip_path, paper_count) VALUES (?,?,?,?,?)",
             (user_id, keyword, html_path, zip_path, paper_count),
@@ -252,7 +213,7 @@ def save_report(user_id: int, keyword: str, html_path: str, zip_path: str, paper
         db.close()
 
 
-def get_reports(user_id: int, limit: int = 20) -> list:
+def get_reports(user_id: int, limit: int = 10) -> list:
     db = _conn()
     try:
         rows = db.execute(
@@ -315,7 +276,6 @@ def get_subscriptions(user_id: int) -> list:
 
 
 def get_all_active_subscriptions() -> list:
-    """Return all active subscriptions with user email (for periodic checking)."""
     db = _conn()
     try:
         rows = db.execute("""
@@ -328,5 +288,4 @@ def get_all_active_subscriptions() -> list:
         db.close()
 
 
-# Initialize DB on import
 init_db()

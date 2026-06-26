@@ -218,7 +218,12 @@ def paper_tags(paper: dict) -> list:
     """Generate human-readable tags."""
     tags = []
     cites = paper.get("citation_count") or 0
-    year = int(paper.get("year", 0) or 0)
+    # year might be "None" string from str(None), or actual None
+    raw_year = paper.get("year", 0) or 0
+    try:
+        year = int(raw_year)
+    except (ValueError, TypeError):
+        year = 0
     real_venue = paper.get("real_venue", "") or paper.get("venue", "")
     journal_ref = paper.get("journal_ref", "")
     category = paper.get("category", "")
