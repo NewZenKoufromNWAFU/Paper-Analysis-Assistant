@@ -20,3 +20,6 @@ papers/
 # Virtual environment
 venv/
 .venv/
+
+# Database
+*.db

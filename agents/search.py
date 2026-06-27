@@ -1,8 +1,7 @@
 
-from state import AgentState
 from tools.academic_search import search_semantic_scholar, search_arxiv
 
-def search_agent(state: AgentState) -> AgentState:
+def search_agent(state):
     queries = state.get("search_queries", [state.get("research_keyword", "AI")])
     all_results = []
     seen = set()

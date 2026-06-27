@@ -5,7 +5,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from config import PAPERS_DIR
 
-def download_arxiv_pdf(arxiv_id: str) -> str | None:
+def download_arxiv_pdf(arxiv_id: str):
     if not arxiv_id:
         return None
     safe_name = arxiv_id.replace("/", "_")
