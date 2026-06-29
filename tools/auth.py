@@ -331,6 +331,18 @@ def increment_search_count(user_id: int):
         db.close()
 
 
+def upgrade_to_pro(user_id: int) -> dict:
+    """Upgrade user to Pro. Returns updated user dict."""
+    db = _conn()
+    try:
+        db.execute("UPDATE users SET is_pro=1 WHERE id=?", (user_id,))
+        db.commit()
+        u = db.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+        return dict(u) if u else {}
+    finally:
+        db.close()
+
+
 def activate_pro(user_id: int) -> bool:
     db = _conn()
     try:
