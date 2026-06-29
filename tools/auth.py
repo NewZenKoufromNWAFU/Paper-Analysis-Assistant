@@ -6,6 +6,8 @@ import bcrypt
 from config import BASE_DIR
 
 DB_PATH = os.path.join(BASE_DIR, "users.db")
+FREE_SEARCH_LIMIT = 5
+PRO_PRICE = "4.99"
 
 
 def _conn():
@@ -58,6 +60,12 @@ def init_db():
     """
     db = _conn()
     db.executescript(sql)
+    # Migration: add columns if missing from older DB
+    for col, typ in [("is_pro", "INTEGER DEFAULT 0"), ("search_count", "INTEGER DEFAULT 0")]:
+        try:
+            db.execute(f"ALTER TABLE users ADD COLUMN {col} {typ}")
+        except Exception:
+            pass
     db.commit()
     db.close()
 
@@ -99,7 +107,7 @@ def register(username: str, email: str, password: str, role: str = "") -> tuple:
 
         h = _hash_pw(password)
         db.execute(
-            "INSERT INTO users (username, email, password_hash, nickname, role) VALUES (?,?,?,?,?)",
+            "INSERT INTO users (username, email, password_hash, nickname, role, is_pro, search_count) VALUES (?,?,?,?,?,0,0)",
             (username, email, h, username, role),
         )
         db.commit()
@@ -294,6 +302,43 @@ def get_all_active_subscriptions() -> list:
             WHERE s.active=1 AND u.email IS NOT NULL AND u.email != ''
         """).fetchall()
         return [dict(r) for r in rows]
+    finally:
+        db.close()
+
+
+# ============================================================
+# Pro membership
+# ============================================================
+def check_search_limit(user_id: int) -> tuple:
+    """Check if user has remaining free searches. Returns (can_search: bool, remaining: int, is_pro: bool)."""
+    db = _conn()
+    try:
+        u = db.execute("SELECT is_pro, search_count FROM users WHERE id=?", (user_id,)).fetchone()
+        if not u: return False, 0, False
+        if u["is_pro"]: return True, -1, True
+        remaining = max(0, FREE_SEARCH_LIMIT - (u["search_count"] or 0))
+        return remaining > 0, remaining, False
+    finally:
+        db.close()
+
+
+def increment_search_count(user_id: int):
+    db = _conn()
+    try:
+        db.execute("UPDATE users SET search_count=COALESCE(search_count,0)+1 WHERE id=?", (user_id,))
+        db.commit()
+    finally:
+        db.close()
+
+
+def activate_pro(user_id: int) -> bool:
+    db = _conn()
+    try:
+        db.execute("UPDATE users SET is_pro=1 WHERE id=?", (user_id,))
+        db.commit()
+        return True
+    except Exception:
+        return False
     finally:
         db.close()
 
