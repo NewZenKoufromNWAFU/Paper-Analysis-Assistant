@@ -1,4 +1,3 @@
-
 from state import AgentState
 from tools.paper_downloader import batch_download
 from config import DOWNLOAD_PAPER_COUNT

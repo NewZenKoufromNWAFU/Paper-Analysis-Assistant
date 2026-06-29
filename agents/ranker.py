@@ -16,7 +16,6 @@ def ranker_agent(state):
     for i, a in enumerate(analyses):
         items.append({"id":i,"title":a.get("title",""),"abstract":(a.get("abstract","")or"")[:500],"year":a.get("year",""),"is_survey":a.get("is_survey",False),"math_density":a.get("math_density","medium"),"concept_level":a.get("concept_level","intermediate"),"page_count":a.get("page_count",10),"citation_count":a.get("citation_count",0),"algorithm_improvement":a.get("algorithm_improvement",""),"benchmark_data":a.get("benchmark_data","")})
     items_json = json.dumps(items, ensure_ascii=False)
-    prompt = "You rank academic papers for a beginner learning path. Score each 1-10 (1=easiest). Surveys easiest, high math harder. Return JSON array sorted easiest-first with keys: id, difficulty_score, difficulty_label, reason, learning_goal, prerequisite, estimated_hours, key_sections"
     prompt = "You rank academic papers for a beginner learning path. Score each 1-10 (1=easiest). Surveys are easiest. High math = harder. Return JSON array sorted easiest-first: [{id,difficulty_score,difficulty_label,reason,learning_goal,prerequisite,estimated_hours,key_sections}]"
     human = HumanMessage(content=f"Papers: {items_json}. Rank easiest to hardest. Return JSON array only.")
     resp = llm.invoke([SystemMessage(content=prompt), human])
@@ -33,7 +32,7 @@ def ranker_agent(state):
     ranked = []
     for r in ranking:
         idx = r.get("id", 0)
-        if idx < len(analyses):
+        if isinstance(idx, int) and 0 <= idx < len(analyses):
             pa = analyses[idx]
             ranked.append({
                 "title": pa.get("title",""),

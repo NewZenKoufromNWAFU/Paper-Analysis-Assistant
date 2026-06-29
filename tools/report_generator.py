@@ -5,7 +5,7 @@ from datetime import datetime
 from config import OUTPUT_DIR
 
 
-def _md_to_html(md_content: str, title: str = "学习路径报告") -> str:
+def _md_to_html(md_content: str = "", title: str = "学习路径报告") -> str:
     """Convert Markdown to a self-contained styled HTML document.
 
     Uses Python's markdown library for reliable conversion, then wraps in a
