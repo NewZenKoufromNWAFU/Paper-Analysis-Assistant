@@ -212,6 +212,81 @@ def batch_enrich(papers: list) -> list:
 
 
 # ================================================================
+# Multi-dimensional authority score (0-100)
+# ================================================================
+def authority_score(paper: dict, keyword: str = "") -> int:
+    """Four-dimensional scoring: venue(0-40) + citations(0-30) + recency(0-15) + match(0-15).
+
+    Max score = 100. Higher = more authoritative/relevant.
+    """
+    real_venue = paper.get("real_venue", "") or paper.get("venue", "")
+    journal_ref = paper.get("journal_ref", "")
+    cites = paper.get("citation_count") or 0
+    raw_year = paper.get("year", 0) or 0
+    try:
+        year = int(raw_year)
+    except (ValueError, TypeError):
+        year = 0
+    category_score = paper.get("category_score", 0) or 0
+    from datetime import datetime
+    from tools.academic_search import _is_top_venue
+
+    score = 0
+    venue_lower = real_venue.lower()
+
+    # 1. Venue dimension (0-40)
+    if _is_top_venue(real_venue) or _is_top_venue(journal_ref):
+        score += 40
+    elif venue_lower and venue_lower != "arxiv":
+        score += 25
+    elif paper.get("accepted_hint"):
+        score += 20
+    elif category_score >= 0.4:
+        score += 10
+    else:
+        score += 5
+
+    # 2. Citation dimension (0-30)
+    cy = datetime.now().year
+    age = max(1, cy - year) if year else 5
+    cites_per_year = cites / age if age > 0 else 0
+    if cites_per_year >= 100:
+        score += 30
+    elif cites_per_year >= 20:
+        score += 22
+    elif cites_per_year >= 5:
+        score += 15
+    elif cites >= 10:
+        score += 8
+    elif cites > 0:
+        score += 3
+
+    # 3. Recency bonus (0-15)
+    if year >= cy - 1:
+        score += 15
+    elif year >= cy - 3:
+        score += 10
+    elif year >= cy - 5:
+        score += 5
+
+    # 4. Topic match bonus (0-15)
+    if keyword:
+        kw_lower = keyword.lower().strip()
+        title_lower = (paper.get("title", "") or "").lower()
+        abstract_lower = (paper.get("abstract", "") or "").lower()
+        kw_parts = kw_lower.split()
+        hits = sum(1 for p in kw_parts if p in title_lower or p in abstract_lower)
+        if hits >= len(kw_parts) * 0.8:
+            score += 15
+        elif hits >= len(kw_parts) * 0.5:
+            score += 10
+        elif hits >= 1:
+            score += 5
+
+    return min(score, 100)
+
+
+# ================================================================
 # Simple tags (no stars)
 # ================================================================
 def paper_tags(paper: dict) -> list:

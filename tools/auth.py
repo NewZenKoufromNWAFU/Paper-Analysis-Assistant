@@ -229,6 +229,16 @@ def get_reports(user_id: int, limit: int = 10) -> list:
 # Subscriptions
 # ============================================================
 def subscribe(user_id: int, keyword: str) -> tuple:
+    """Subscribe to a keyword. Validates keyword is a legitimate research term (>= 3 chars, alphanumeric/Chinese)."""
+    keyword = keyword.strip()
+    if not keyword or len(keyword) < 3:
+        return False, "订阅关键词至少 3 个字符"
+    if len(keyword) > 80:
+        return False, "订阅关键词不能超过 80 个字符"
+    # Must contain at least some letter or Chinese char, not just symbols/numbers
+    import re
+    if not re.search(r'[a-zA-Z一-鿿]', keyword):
+        return False, "关键词需包含字母或中文"
     db = _conn()
     try:
         u = db.execute("SELECT email FROM users WHERE id=?", (user_id,)).fetchone()
@@ -236,13 +246,13 @@ def subscribe(user_id: int, keyword: str) -> tuple:
             return False, "请先绑定邮箱才能使用订阅功能"
         existing = db.execute(
             "SELECT id FROM subscriptions WHERE user_id=? AND keyword=?",
-            (user_id, keyword.strip()),
+            (user_id, keyword),
         ).fetchone()
         if existing:
             return False, f"已订阅过「{keyword}」"
         db.execute(
             "INSERT INTO subscriptions (user_id, keyword) VALUES (?,?)",
-            (user_id, keyword.strip()),
+            (user_id, keyword),
         )
         db.commit()
         return True, f"已订阅「{keyword}」，有新论文将推送到 {u['email']}"

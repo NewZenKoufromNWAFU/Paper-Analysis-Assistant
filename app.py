@@ -6,7 +6,7 @@ from tools.academic_search import search_papers
 from tools.paper_downloader import batch_download
 from tools.report_generator import save_html_report
 from tools.email_sender import create_zip, send_email
-from tools.paper_validator import batch_enrich, paper_tags
+from tools.paper_validator import batch_enrich, paper_tags, authority_score
 from tools.auth import register, login, update_profile
 from tools.auth import save_search_history, get_search_history
 from tools.auth import save_report, get_reports
@@ -495,6 +495,10 @@ with right:
                     elif cites is not None and cites == 0: ct = "📊 引用: 0 次"
                     else: ct = "📊 引用: 暂无数据"
                     st.markdown(f"🏛 **{rv}**{sh}  |  {ct}  |  📅 {paper.get('real_year',paper.get('year','N/A'))}")
+                    # 百分制评分
+                    score = authority_score(paper, st.session_state.last_keyword)
+                    score_color = "🟢" if score >= 70 else ("🟡" if score >= 40 else "🔴")
+                    st.progress(score / 100, text=f"{score_color} 综合评分: {score}/100（期刊·引用·时效·匹配）")
                     st.caption(f"✍ {paper.get('authors','N/A')}")
                     tags = paper_tags(paper)
                     if tags: st.caption(" | ".join(tags))
