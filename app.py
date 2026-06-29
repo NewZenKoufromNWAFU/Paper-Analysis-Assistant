@@ -23,21 +23,80 @@ st.set_page_config(page_title="论文学习路径生成器", page_icon="🎓", l
 
 st.markdown("""
 <style>
-  .badge-container { display:flex; align-items:center; gap:10px; padding:10px 12px; background:rgba(0,0,0,0.03); border:1px solid #e0e0e0; border-radius:12px; margin:8px 0; }
-  .badge-avatar { width:38px; height:38px; border-radius:50%; background:linear-gradient(135deg,#667eea,#764ba2); display:flex; align-items:center; justify-content:center; color:white; font-weight:bold; font-size:16px; flex-shrink:0; }
-  .badge-info { flex:1; line-height:1.3; }
-  .badge-name { font-weight:600; font-size:14px; color:#1a1a2e; }
-  .badge-label { display:inline-block; font-size:11px; padding:1px 8px; border-radius:10px; font-weight:600; }
-  .badge-pro { background:#ffd700; color:#1a1a2e; }
-  .badge-free { background:#e2e8f0; color:#4a5568; }
-  .search-count { font-size:12px; color:#718096; margin-top:2px; }
-  .pro-card { background:white; border:1px solid #e0e0e0; border-radius:16px; padding:24px; margin:12px 0; text-align:center; box-shadow:0 2px 8px rgba(0,0,0,0.06); }
-  .pro-card h3 { color:#1a202c; margin-bottom:8px; }
-  .pro-card .price { font-size:32px; font-weight:bold; color:#1a202c; }
-  .pro-card .price span { font-size:16px; color:#718096; }
-  .pro-card ul { list-style:none; padding:0; text-align:left; }
-  .pro-card li { padding:6px 0; color:#4a5568; }
-  .pro-card-highlight { border:2px solid #ffd700; background:linear-gradient(145deg,#fffbea,#ffffff); }
+:root {
+  --primary: #1a365d;
+  --primary-light: #2b6cb0;
+  --primary-dark: #0f1f3d;
+  --accent: #d69e2e;
+  --accent-light: #f6e05e;
+  --accent-bg: #fffff0;
+  --bg: #f7fafc;
+  --card-bg: #ffffff;
+  --text: #1a202c;
+  --text-secondary: #4a5568;
+  --text-muted: #a0aec0;
+  --border: #e2e8f0;
+  --success: #38a169;
+  --info: #3182ce;
+  --radius: 12px;
+  --radius-sm: 8px;
+  --shadow: 0 4px 6px rgba(0,0,0,0.05);
+  --shadow-md: 0 6px 16px rgba(0,0,0,0.1);
+  --shadow-lg: 0 12px 32px rgba(0,0,0,0.12);
+}
+.stApp { background: var(--bg); }
+.badge-container { display:flex; align-items:center; gap:12px; padding:14px 16px; background:var(--card-bg); border:1px solid var(--border); border-radius:var(--radius); margin:8px 0; box-shadow:var(--shadow); transition:all 0.2s; }
+.badge-container:hover { box-shadow:var(--shadow-md); }
+.badge-avatar { width:44px; height:44px; border-radius:50%; background:linear-gradient(135deg,var(--primary),var(--primary-light)); display:flex; align-items:center; justify-content:center; color:white; font-weight:700; font-size:20px; flex-shrink:0; }
+.badge-info { flex:1; line-height:1.4; }
+.badge-name { font-weight:700; font-size:15px; color:var(--text); }
+.badge-label { display:inline-block; font-size:11px; padding:2px 10px; border-radius:12px; font-weight:600; margin-top:3px; }
+.badge-pro { background:var(--accent-bg); color:#744210; border:1px solid var(--accent); }
+.badge-free { background:#edf2f7; color:var(--text-secondary); border:1px solid #cbd5e0; }
+.search-count { font-size:12px; color:var(--text-muted); margin-top:3px; }
+.guest-banner { background:linear-gradient(90deg,#ebf8ff,#e6fffa); border:1px solid #90cdf4; border-radius:8px; padding:12px 16px; margin:0 0 12px 0; font-size:13px; color:#2b6cb0; line-height:1.5; }
+.login-card { background:var(--card-bg); border-radius:var(--radius); overflow:hidden; box-shadow:var(--shadow-lg); border:1px solid var(--border); }
+.login-header { background:linear-gradient(135deg,var(--primary),var(--primary-light)); padding:28px 32px; text-align:center; }
+.login-header h1 { color:white; font-size:26px; font-weight:800; margin:0 0 4px 0; }
+.login-header p { color:rgba(255,255,255,0.85); font-size:14px; margin:0; }
+.login-body { padding:28px 32px; }
+.pro-card { background:var(--card-bg); border:1px solid var(--border); border-radius:var(--radius); padding:28px 24px; margin:12px 0; box-shadow:var(--shadow); }
+.pro-card h3 { color:var(--text); font-size:20px; font-weight:700; margin-bottom:12px; }
+.pro-card .price { font-size:36px; font-weight:800; color:var(--text); margin-bottom:16px; }
+.pro-card .price span { font-size:16px; font-weight:400; color:var(--text-muted); }
+.pro-card ul { list-style:none; padding:0; margin:0; }
+.pro-card ul li { padding:8px 0; color:var(--text-secondary); font-size:14px; border-bottom:1px solid #f7fafc; }
+.pro-card ul li:last-child { border-bottom:none; }
+.pro-card ul li::before { content:"✓ "; color:var(--success); font-weight:700; }
+.pro-card-highlight { border:2px solid var(--accent); background:linear-gradient(145deg,var(--accent-bg),var(--card-bg)); position:relative; }
+.pro-card-highlight::after { content:"推荐"; position:absolute; top:-10px; right:16px; background:var(--accent); color:var(--primary-dark); font-size:11px; font-weight:700; padding:2px 12px; border-radius:10px; letter-spacing:1px; }
+.paper-card { background:var(--card-bg); border:1px solid var(--border); border-radius:var(--radius); padding:20px; margin:12px 0; box-shadow:var(--shadow); transition:border-color 0.2s,box-shadow 0.2s; }
+.paper-card:hover { border-color:var(--primary-light); box-shadow:var(--shadow-md); }
+.paper-card.selected { border-left:4px solid var(--accent); }
+.paper-title { font-size:17px; font-weight:700; color:var(--primary-dark); margin-bottom:8px; }
+.paper-meta { font-size:13px; color:var(--text-secondary); margin-bottom:6px; }
+.paper-tags { display:flex; flex-wrap:wrap; gap:6px; margin:8px 0; }
+.tag-pill { display:inline-block; font-size:11px; padding:2px 10px; border-radius:12px; background:#edf2f7; color:var(--text-secondary); border:1px solid #e2e8f0; }
+.tag-top { background:var(--accent-bg); color:#744210; border:1px solid var(--accent); font-weight:600; }
+.tag-hot { background:#fff5f5; color:#c53030; border:1px solid #feb2b2; font-weight:600; }
+.tag-core { background:#f0fff4; color:#276749; border:1px solid #9ae6b4; font-weight:600; }
+.citation-bar { display:flex; align-items:center; gap:8px; margin:6px 0; }
+.citation-track { flex:1; height:6px; background:#edf2f7; border-radius:3px; overflow:hidden; }
+.citation-fill { height:100%; background:linear-gradient(90deg,var(--info),var(--primary-light)); border-radius:3px; }
+.citation-count { font-size:12px; font-weight:600; color:var(--text); min-width:60px; text-align:right; }
+.step-indicator { display:flex; align-items:center; gap:10px; padding:8px 0; font-size:13px; color:var(--text-muted); }
+.step-indicator.active { color:var(--text); font-weight:600; }
+.step-indicator.done { color:var(--success); }
+.step-dot { width:10px; height:10px; border-radius:50%; background:var(--border); flex-shrink:0; }
+.step-indicator.active .step-dot { background:var(--info); animation:pulse 1.5s infinite; }
+.step-indicator.done .step-dot { background:var(--success); }
+@keyframes pulse { 0%,100% { opacity:1; } 50% { opacity:0.4; } }
+.payment-card { background:var(--card-bg); border:1px solid var(--border); border-radius:var(--radius); padding:20px; text-align:center; box-shadow:var(--shadow); margin:12px 0; }
+.payment-card h4 { color:var(--text); font-size:16px; font-weight:700; margin-bottom:12px; }
+[data-testid="stExpander"] summary { font-weight:600; color:var(--text); }
+.stTabs [data-baseweb="tab-list"] { gap:4px; }
+.stTabs [data-baseweb="tab"] { height:40px; padding-left:16px; padding-right:16px; border-radius:8px 8px 0 0; background:transparent; color:var(--text-secondary); font-weight:600; }
+.stTabs [data-baseweb="tab"][aria-selected="true"] { background:var(--card-bg); color:var(--text); border-bottom:2px solid var(--accent); }
 </style>
 """, unsafe_allow_html=True)
 st.set_page_config(page_title="论文学习路径生成器", page_icon="🎓", layout="wide")
@@ -104,15 +163,21 @@ def do_logout():
 # === 登录/注册页面 ===
 # ============================================================
 if st.session_state.page == "login":
-    _, col_c, _ = st.columns([1, 2, 1])
+    _, col_c, _ = st.columns([1, 2.5, 1])
     with col_c:
-        st.title("🎓 论文学习路径生成器")
-        st.caption("搜索论文 → 选择 → 生成学习路径 → 下载/发送邮箱")
+        st.markdown("""
+        <div class="login-card">
+          <div class="login-header">
+            <h1>🎓 论文学习路径生成器</h1>
+            <p>搜索论文 → 选择 → 生成学习路径 → 下载/发送邮箱</p>
+          </div>
+          <div class="login-body">
+        """, unsafe_allow_html=True)
 
         tab_login, tab_reg = st.tabs(["登录", "注册"])
 
         with tab_login:
-            st.subheader("账号登录")
+            st.markdown('''<p style="font-weight:600;font-size:15px;color:#1a202c;margin-bottom:8px;">账号登录</p>''', unsafe_allow_html=True)
             l_u = st.text_input("用户名", key="l_u", placeholder="请输入用户名")
             l_p = st.text_input("密码", type="password", key="l_p", placeholder="请输入密码")
             c1, c2 = st.columns(2)
@@ -120,40 +185,32 @@ if st.session_state.page == "login":
                 if st.button("登录", type="primary", use_container_width=True):
                     ok, msg, user = login(l_u, l_p)
                     if ok:
-                        st.session_state.user = user
-                        st.session_state.page = "main"
-                        st.rerun()
-                    else:
-                        st.error(msg)
+                        st.session_state.user = user; st.session_state.page = "main"; st.rerun()
+                    else: st.error(msg)
             with c2:
                 if st.button("游客访问", use_container_width=True):
-                    st.session_state.user = None
-                    st.session_state.page = "main"
-                    st.rerun()
+                    st.session_state.user = None; st.session_state.page = "main"; st.rerun()
 
         with tab_reg:
-            st.subheader("注册新账号")
-            r_u = st.text_input("用户名", key="r_u", placeholder="2位以上")
+            st.markdown('''<p style="font-weight:600;font-size:15px;color:#1a202c;margin-bottom:8px;">注册新账号</p>''', unsafe_allow_html=True)
+            r_u = st.text_input("用户名 (2位以上)", key="r_u", placeholder="请输入用户名")
             r_e = st.text_input("邮箱", key="r_e", placeholder="your@email.com")
-            r_p = st.text_input("密码 (6位以上)", type="password", key="r_p")
-            r_role = st.selectbox("学术身份（推荐选择，有助于精准推荐论文）",
-                                  options=["暂不选择", "本科", "硕士", "博士", "博士后", "教师/研究员"],
+            r_p = st.text_input("密码 (6位以上)", type="password", key="r_p", placeholder="设置密码")
+            r_role = st.selectbox("学术身份",
+                                  options=["暂不选择","本科","硕士","博士","博士后","教师/研究员"],
                                   index=0, key="r_role")
             if st.button("注册", type="primary", use_container_width=True):
                 role = r_role if r_role != "暂不选择" else ""
                 ok, msg, user = register(r_u, r_e, r_p, role)
                 if ok:
-                    st.session_state.user = user
-                    st.session_state.page = "main"
-                    st.rerun()
-                else:
-                    st.error(msg)
+                    st.session_state.user = user; st.session_state.page = "main"; st.rerun()
+                else: st.error(msg)
 
-        st.divider()
-        st.caption("游客可直接访问，不会保存搜索历史和报告。")
+        st.markdown('''<div style="text-align:center;padding:16px 0 0 0;border-top:1px solid #e2e8f0;margin-top:16px;">
+  <p style="font-size:13px;color:#a0aec0;margin:0;">游客可直接访问，不会保存搜索历史和报告。</p>
+</div></div></div>''', unsafe_allow_html=True)
 
     st.stop()
-
 
 # ============================================================
 # === 主页面 ===
@@ -278,46 +335,117 @@ st.divider()
 # ============================================================
 # 主界面
 
-current_tab = st.sidebar.radio("导航", ["\U0001f50d 搜索", "\u2b50 Pro"], index=0, key="nav_tab", label_visibility="collapsed")
+current_tab = st.sidebar.radio("导航", ["🔍 搜索", "👤 账户", "📬 订阅", "⭐ Pro"], index=0, key="nav_tab", label_visibility="collapsed")
 st.sidebar.divider()
 
-if user:
-    initial = (user.get("nickname") or user.get("username", "?"))[0].upper()
-    display_name = user.get("nickname") or user.get("username", "用户")
-    b_label = "Pro" if is_pro else "免费"
-    b_cls = "badge-pro" if is_pro else "badge-free"
-    info_text = "无限搜索" if is_pro else f"剩余 {remaining}/{FREE_SEARCH_LIMIT} 次"
-    st.sidebar.markdown(f"""
-    <div class=\"badge-container\">
-      <div class=\"badge-avatar\">{initial}</div>
-      <div class=\"badge-info\">
-        <div class=\"badge-name\">{display_name}</div>
-        <span class=\"badge-label {b_cls}\">{b_label}</span>
-        <div class=\"search-count\">{info_text}</div>
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
-else:
-    st.sidebar.markdown('<div class=\"badge-container\"><div class=\"badge-avatar\">?</div><div class=\"badge-info\"><div class=\"badge-name\">游客</div><span class=\"badge-label badge-free\">免费</span><div class=\"search-count\">未登录</div></div></div>', unsafe_allow_html=True)
 
 if not is_guest and not is_pro:
     if remaining <= 0:
-        st.sidebar.warning("免费搜索次数已用完，请升级 Pro", icon=":smile:")
+        st.sidebar.warning("免费搜索次数已用完，请升级 Pro", icon="⚠️")
     elif remaining <= 2:
-        st.sidebar.info(f"免费搜索剩余 {remaining} 次", icon=":information_source:")
+        st.sidebar.info(f"免费搜索剩余 {remaining} 次", icon="ℹ️")
 
 st.sidebar.divider()
 
+
+if "账户" in current_tab:
+    st.title("👤 账户信息")
+    st.divider()
+    if is_guest:
+        st.info("您当前是游客模式，登录后可查看账户信息。")
+        if st.button("🔐 登录/注册", type="primary"):
+            st.session_state.page = "login"
+            st.rerun()
+    else:
+        nn = user.get("nickname", "") or user.get("username", "用户")
+        col1, col2 = st.columns([1, 3])
+        with col1:
+            initial = nn[0].upper()
+            st.markdown(f"""<div class="badge-avatar" style="width:64px;height:64px;font-size:28px;margin:0 auto;">{initial}</div>""", unsafe_allow_html=True)
+        with col2:
+            st.markdown(f"### {nn}")
+            role = user.get("role", "") or "未设置"
+            pro_label = "⭐ Pro" if is_pro else "免费"
+            st.caption(f"🎓 {role}  |  {pro_label}")
+            st.caption(f"📧 {user.get("email","未绑定邮箱")}")
+        st.divider()
+        st.subheader("🔍 搜索统计")
+        if is_pro:
+            st.markdown("🔍 搜索剩余：**无限** 次")
+        else:
+            st.markdown(f"🔍 搜索剩余：**{remaining}** / {FREE_SEARCH_LIMIT} 次")
+        st.divider()
+        st.subheader("✏️ 编辑资料")
+        n_e = st.text_input("邮箱", value=user.get("email", ""), key="acct_email")
+        n_r = st.selectbox("学术身份", options=["", "本科", "硕士", "博士", "博士后", "教师/研究员"], index=(["","本科","硕士","博士","博士后","教师/研究员"].index(user.get("role","")) if user.get("role","") in ["本科","硕士","博士","博士后","教师/研究员"] else 0), key="acct_role")
+        col_save, col_out = st.columns(2)
+        with col_save:
+            if st.button("💾 保存", use_container_width=True):
+                ok, msg, u = update_profile(user["id"], role=n_r, email=n_e)
+                if ok: st.session_state.user = u; st.success("✅ " + msg); st.rerun()
+                else: st.error(msg)
+        with col_out:
+            if st.button("🚪 退出登录", use_container_width=True, type="primary"):
+                do_logout()
+
+        st.divider()
+        st.subheader("📋 搜索历史")
+        sh = get_search_history(user["id"])
+        if sh:
+            for h in sh[:10]:
+                st.caption(f"🔍 {h.get("keyword","")} — {h.get("created_at","")}")
+        else:
+            st.caption("暂无搜索记录")
+
+if "订阅" in current_tab:
+    st.title("📬 论文订阅")
+    st.caption("订阅感兴趣的研究方向，系统将定期发送最新论文到你的邮箱。")
+    st.divider()
+    if is_guest:
+        st.info("订阅需要登录后使用。")
+        if st.button("🔐 登录/注册", type="primary"):
+            st.session_state.page = "login"
+            st.rerun()
+    elif not user.get("email"):
+        st.warning("请先在账户中设置邮箱。")
+    else:
+        sk = st.text_input("订阅关键词", key="sub_kw", placeholder="输入研究方向…")
+        c1, c2 = st.columns(2)
+        with c1:
+            if st.button("🔍 订阅", type="primary", use_container_width=True):
+                if not sk.strip():
+                    st.warning("请输入关键词")
+                else:
+                    ok, msg = subscribe(user["id"], sk)
+                    if ok: st.success(msg); st.rerun()
+                    else: st.warning(msg)
+        with c2:
+            if st.button("📋 我的订阅", use_container_width=True):
+                st.session_state.show_subs = not st.session_state.get("show_subs", False)
+        if st.session_state.get("show_subs"):
+            st.divider()
+            subs = get_subscriptions(user["id"])
+            if subs:
+                for s in subs:
+                    cc1, cc2 = st.columns([4, 1])
+                    with cc1:
+                        st.markdown(f"🔔 {s["keyword"]}")
+                        st.caption(f"📅 {s.get("created_at","")}")
+                    with cc2:
+                        if st.button("取消", key=f"unsub_{s["id"]}"):
+                            unsubscribe(user["id"], s["keyword"]); st.rerun()
+            else:
+                st.caption("暂无订阅")
 if "Pro" in current_tab:
-    st.title("\u2b50 Pro 会员升级")
+    st.title("⭐ Pro 会员升级")
     st.caption("解锁无限搜索与更多高级功能")
     st.divider()
     col_a, col_b = st.columns([1, 1])
     with col_a:
         st.markdown("""
-        <div class=\"pro-card\">
+        <div class="pro-card">
           <h3>免费版</h3>
-          <div class=\"price\">\u00a50 <span>/ 永久</span></div>
+          <div class="price">¥0 <span>/ 永久</span></div>
           <ul>
             <li>最多 5 次搜索</li>
             <li>每次搜索 5 篇论文</li>
@@ -328,9 +456,9 @@ if "Pro" in current_tab:
         """, unsafe_allow_html=True)
     with col_b:
         st.markdown("""
-        <div class=\"pro-card pro-card-highlight\">
-          <h3>\u2b50 Pro 会员</h3>
-          <div class=\"price\">\u00a54.99 <span>/ 月</span></div>
+        <div class="pro-card pro-card-highlight">
+          <h3>⭐ Pro 会员</h3>
+          <div class="price">¥4.99 <span>/ 月</span></div>
           <ul>
             <li>无限搜索次数</li>
             <li>每次搜索最多 10 篇</li>
@@ -340,33 +468,55 @@ if "Pro" in current_tab:
         </div>
         """, unsafe_allow_html=True)
     if is_pro:
-        st.success("\U0001f389 您已经是 Pro 会员，感谢支持！")
+        st.success("🎉 您已经是 Pro 会员，感谢支持！")
     else:
-        st.divider()
-        st.subheader("\U0001f4b3 升级到 Pro")
-        qr_path = os.path.join(os.path.dirname(__file__), "assets", "wechat_pay.png")
-        if os.path.exists(qr_path):
-            st.image(qr_path, width=200, caption="微信支付收款码")
+        st.markdown('<div class="payment-card"><h4>💳 升级到 Pro</h4>', unsafe_allow_html=True)
+        if is_guest:
+            st.warning("游客模式无法升级，请先登录注册。")
         else:
-            st.info("付款码图片未找到，请将收款码放到 assets/wechat_pay.png")
-        pro_email = st.text_input("付款邮箱", placeholder="输入付款时使用的邮箱", key="pro_email_input")
-        if st.button("激活 Pro", type="primary", use_container_width=True, key="activate_pro"):
-            if not pro_email.strip():
-                st.warning("请输入邮箱")
+            user_email = user.get("email", "")
+            if not user_email:
+                st.warning("您的账号未绑定邮箱，请先在账户中设置邮箱。")
             else:
-                with st.spinner("正在激活..."):
-                    ok, result = upgrade_to_pro(user["id"])
-                    if ok:
-                        st.session_state.user = result
-                        st.success("\U0001f389 Pro 会员激活成功！")
-                        st.balloons()
+                st.markdown(f"<p style='font-size:14px;color:#1a202c;margin-bottom:8px;'>付款邮箱：<strong>{user_email}</strong></p>", unsafe_allow_html=True)
+                st.markdown("<p style='font-size:13px;color:#4a5568;margin-bottom:16px;'>扫码支付后点击下方按钮激活 Pro。系统自动识别该邮箱的付款记录。</p>", unsafe_allow_html=True)
+
+                if "show_qr" not in st.session_state:
+                    st.session_state.show_qr = False
+
+                if not st.session_state.show_qr:
+                    if st.button("💵 点击激活 Pro，查看收款码", type="primary", use_container_width=True):
+                        st.session_state.show_qr = True
                         st.rerun()
+
+                if st.session_state.show_qr:
+                    qr_path = os.path.join(os.path.dirname(__file__), "assets", "wechat_pay.png")
+                    if os.path.exists(qr_path):
+                        st.image(qr_path, width=220, caption="微信扫码支付 \u00a54.99/月")
                     else:
-                        st.error(result)
+                        st.info("付款码图片未找到，请将收款码放到 assets/wechat_pay.png")
+                    col_a, col_b = st.columns(2)
+                    with col_a:
+                        if st.button("✅ 已转账，激活 Pro", type="primary", use_container_width=True):
+                            with st.spinner("正在激活..."):
+                                ok, result = upgrade_to_pro(user["id"])
+                                if ok:
+                                    st.session_state.user = result
+                                    st.success("🎉 Pro 会员激活成功！")
+                                    st.balloons()
+                                    st.rerun()
+                                else:
+                                    st.error(result)
+                    with col_b:
+                        if st.button("🔙 取消", use_container_width=True):
+                            st.session_state.show_qr = False
+                            st.rerun()
 
+        st.markdown("<div style='margin-top:16px;padding:12px;background:#f7fafc;border-radius:8px;font-size:13px;color:#4a5568;'><p><strong>常见问题：</strong></p><p>• 付款后多久生效？点击已转账当即激活</p><p>• 可以退款吗？如有问题请联系客服</p><p>• 邮箱不对怎么办？请确保登录邮箱与付款邮箱一致</p></div>", unsafe_allow_html=True)
+        st.markdown("</div>", unsafe_allow_html=True)
 if "Pro" not in current_tab:
-    left, right = st.columns([1, 2])
 
+    left, right = st.columns([1, 2])
     with left:
         st.subheader("🔍 搜索论文")
         mode = st.radio("搜索模式", options=["快速搜索", "深度检索 (AI Agent)"],
@@ -483,27 +633,6 @@ if "Pro" not in current_tab:
                 if st.button("📥 仅下载论文", use_container_width=True):
                     st.session_state.generating = True; st.session_state.download_only = True
                     st.session_state.confirm_new_search = False; st.rerun()
-    
-        if not is_guest and user.get("email"):
-            st.divider()
-            st.subheader("📬 论文订阅")
-            sk = st.text_input("订阅关键词", key="sub_kw", placeholder="输入研究方向…")
-            cs1, cs2 = st.columns(2)
-            with cs1:
-                if st.button("➕ 订阅", use_container_width=True):
-                    ok, msg = subscribe(user["id"], sk)
-                    if ok: st.success(msg)
-                    else: st.warning(msg)
-            with cs2:
-                if st.button("📋 我的订阅", use_container_width=True):
-                    st.session_state.show_subs = not st.session_state.get("show_subs", False)
-            if st.session_state.get("show_subs"):
-                for s in get_subscriptions(user["id"]):
-                    st.caption(f"🔔 {s['keyword']}")
-                    if st.button("取消", key=f"unsub_{s['id']}"):
-                        unsubscribe(user["id"], s["keyword"]); st.rerun()
-    
-    
     # ========== 右栏 ==========
     with right:
         if st.session_state.confirm_new_search:
@@ -520,6 +649,7 @@ if "Pro" not in current_tab:
                 st.warning("没有已选论文"); st.session_state.generating = False
             elif st.session_state.download_only:
                 st.subheader("📥 正在下载论文…")
+                st.markdown('''<div class="step-indicator active"><span class="step-dot"></span> 步骤 1/2: 📥 下载论文 PDF</div><div class="step-indicator"><span class="step-dot"></span> 步骤 2/2: 📦 打包</div>''', unsafe_allow_html=True)
                 status = st.empty()
                 prog = st.progress(0, text="🚀 启动中…")
                 status.info("📥 正在并行下载论文 PDF…")
@@ -528,12 +658,14 @@ if "Pro" not in current_tab:
                 if not downloaded:
                     st.error("下载失败：所选论文均无 arXiv ID。"); st.session_state.generating = False
                 else:
+                    st.markdown('''<div class="step-indicator done"><span class="step-dot"></span> 步骤 1/2: ✔ 下载完成</div><div class="step-indicator active"><span class="step-dot"></span> 步骤 2/2: 📦 打包</div>''', unsafe_allow_html=True)
                     status.info("📦 正在打包…")
                     prog.progress(80, "📦 打包中…")
                     zp = create_zip(downloaded, None)
                     if zp is None:
                         st.error("打包失败。"); st.session_state.generating = False
                     else:
+                        st.markdown('''<div class="step-indicator done"><span class="step-dot"></span> 步骤 1/2: ✔ 下载完成</div><div class="step-indicator done"><span class="step-dot"></span> 步骤 2/2: ✔ 打包完成</div>''', unsafe_allow_html=True)
                         status.success("✅ 完成！")
                         prog.progress(100, "🎉 下载完成！")
                         st.session_state.generating = False; st.session_state.report_ready = True
@@ -545,26 +677,31 @@ if "Pro" not in current_tab:
                         st.rerun()
             else:
                 st.subheader("🔨 正在生成学习路径…")
+                st.markdown('''<div class="step-indicator active"><span class="step-dot"></span> 步骤 1/4: 📥 下载论文</div><div class="step-indicator"><span class="step-dot"></span> 步骤 2/4: 🤖 AI 分析内容</div><div class="step-indicator"><span class="step-dot"></span> 步骤 3/4: 📄 生成报告</div><div class="step-indicator"><span class="step-dot"></span> 步骤 4/4: 📦 打包完成</div>''', unsafe_allow_html=True)
                 status = st.empty()
                 prog = st.progress(0, text="🚀 启动中…")
-        
+
                 status.info("📥 正在下载论文 PDF…")
                 prog.progress(10, "📥 下载论文中（并行加速）…")
                 downloaded = batch_download(papers, max_workers=8)
-        
+
+                st.markdown('''<div class="step-indicator done"><span class="step-dot"></span> 步骤 1/4: ✔ 下载完成</div><div class="step-indicator active"><span class="step-dot"></span> 步骤 2/4: 🤖 AI 分析中</div><div class="step-indicator"><span class="step-dot"></span> 步骤 3/4: 📄 生成报告</div><div class="step-indicator"><span class="step-dot"></span> 步骤 4/4: 📦 打包完成</div>''', unsafe_allow_html=True)
                 status.info("🤖 AI 正在撰写学习路径报告（30-60秒）…")
                 prog.progress(40, "🤖 AI 分析中…")
                 kw = st.session_state.last_keyword or "学术论文"
                 md = generate_learning_path_report(papers, kw)
-        
+
+                st.markdown('''<div class="step-indicator done"><span class="step-dot"></span> 步骤 1/4: ✔ 下载完成</div><div class="step-indicator done"><span class="step-dot"></span> 步骤 2/4: ✔ AI 分析完成</div><div class="step-indicator active"><span class="step-dot"></span> 步骤 3/4: 📄 生成 HTML</div><div class="step-indicator"><span class="step-dot"></span> 步骤 4/4: 📦 打包完成</div>''', unsafe_allow_html=True)
                 status.info("📄 正在生成 HTML 报告…")
                 prog.progress(75, "📄 渲染 HTML…")
                 hp = save_html_report(md, "learning_path")
-        
+
+                st.markdown('''<div class="step-indicator done"><span class="step-dot"></span> 步骤 1/4: ✔ 下载完成</div><div class="step-indicator done"><span class="step-dot"></span> 步骤 2/4: ✔ AI 分析完成</div><div class="step-indicator done"><span class="step-dot"></span> 步骤 3/4: ✔ HTML 已生成</div><div class="step-indicator active"><span class="step-dot"></span> 步骤 4/4: 📦 打包中</div>''', unsafe_allow_html=True)
                 status.info("📦 正在打包…")
                 prog.progress(90, "📦 打包中…")
                 zp = create_zip(downloaded, hp)
-        
+
+                st.markdown('''<div class="step-indicator done"><span class="step-dot"></span> 步骤 1/4: ✔ 下载完成</div><div class="step-indicator done"><span class="step-dot"></span> 步骤 2/4: ✔ AI 分析完成</div><div class="step-indicator done"><span class="step-dot"></span> 步骤 3/4: ✔ HTML 已生成</div><div class="step-indicator done"><span class="step-dot"></span> 步骤 4/4: ✔ 打包完成</div>''', unsafe_allow_html=True)
                 status.success("✅ 完成！")
                 prog.progress(100, "🎉 学习路径已生成！")
                 st.session_state.generating = False; st.session_state.report_ready = True
@@ -572,7 +709,6 @@ if "Pro" not in current_tab:
                 st.session_state.report_md = md; st.session_state.downloaded = downloaded
                 if not is_guest: save_report(user["id"], kw, hp, zp, len(papers))
                 st.rerun()
-        
         elif st.session_state.report_ready:
             n = len(st.session_state.downloaded)
             if st.session_state.report_md:
@@ -611,35 +747,41 @@ if "Pro" not in current_tab:
             sel_ids = {paper_key(p) for p in st.session_state.selected_papers}
             for i, paper in enumerate(results):
                 pid = paper_key(paper); selected = pid in sel_ids
-                with st.container(border=True):
+                max_cite = max((p.get("citation_count", 0) or 0) for p in results) if results else 1
+                with st.container():
                     cm, cb = st.columns([6, 1])
                     with cm:
-                        st.markdown(f"### {i+1}. {paper['title']}")
                         rv = paper.get("real_venue","") or paper.get("venue","N/A")
                         src = paper.get("venue_source","")
                         sh = f" [{src}]" if src and src != "category-whitelist" else ""
-                        cites = paper.get("citation_count")
-                        if cites is not None and cites > 0: ct = f"📊 **引用: {cites:,} 次**"
-                        elif cites is not None and cites == 0: ct = "📊 引用: 0 次"
-                        else: ct = "📊 引用: 暂无数据"
-                        st.markdown(f"🏛 **{rv}**{sh}  |  {ct}  |  📅 {paper.get('real_year',paper.get('year','N/A'))}")
-                        st.caption(f"✍ {paper.get('authors','N/A')}")
-                        tags = paper_tags(paper)
-                        if tags: st.caption(" | ".join(tags))
+                        cites = paper.get("citation_count", 0) or 0
+                        yr = paper.get("real_year", paper.get("year", "N/A"))
+                        bar_pct = min(100, int(cites / max_cite * 100)) if max_cite > 0 else 0
+                        st.markdown(f"""
+                        <div class="paper-card">
+                          <div class="paper-title">{i+1}. {paper["title"]}</div>
+                          <div class="paper-meta">🏛 <strong>{rv}</strong>{sh}  |  📅 {yr}</div>
+                          <div class="citation-bar">
+                            <span class="citation-count">📊 {cites or 0:,}</span>
+                            <div class="citation-track"><div class="citation-fill" style="width:{bar_pct}%"></div></div>
+                          </div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                        st.caption("✍ " + paper.get("authors", "N/A"))
                         abstract = paper.get("abstract","")
                         if abstract:
-                            with st.expander(f"📝 摘要 ({len(abstract)} 字)"): st.markdown(abstract)
+                            with st.expander("📝 摘要 (" + str(len(abstract)) + " 字)"): st.markdown(abstract)
                         else: st.caption("(无摘要)")
                         aid = paper.get("arxiv_id","")
-                        if aid: st.markdown(f"[📎 arXiv: {aid}](https://arxiv.org/abs/{aid})")
+                        if aid: st.markdown("[📎 arXiv: " + aid + "](https://arxiv.org/abs/" + aid + ")")
                     with cb:
                         if selected:
                             st.success("已选")
-                            if st.button("取消", key=f"desel_{i}"):
+                            if st.button("取消", key="desel_" + str(i) + "_res"):
                                 st.session_state.selected_papers = [p for p in st.session_state.selected_papers if paper_key(p) != pid]
                                 st.rerun()
                         else:
-                            if st.button("+ 选择", key=f"sel_{i}"):
+                            if st.button("+ 选择", key="sel_res_" + str(i) + "_res"):
                                 st.session_state.selected_papers.append(paper); st.rerun()
         
         else:

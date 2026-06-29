@@ -5,6 +5,8 @@ import sys
 import traceback
 from typing import List, Optional
 from config import MAX_SEARCH_RESULTS
+import os
+_S2_API_KEY = os.getenv("SEMSCHOLAR_API_KEY", "")
 
 # --- 权威期刊/会议列表 ---
 TOP_VENUES = {
@@ -51,9 +53,11 @@ def _fetch_json(url, params):
         time.sleep(_S2_API_CALL_INTERVAL - gap)
     _last_s2_call = time.time()
 
+    headers = {"x-api-key": _S2_API_KEY} if _S2_API_KEY else {}
+
     for attempt in range(2):
         try:
-            resp = requests.get(url, params=params, timeout=15)
+            resp = requests.get(url, params=params, timeout=15, headers=headers)
             if resp.status_code == 429:
                 wait = 2 * (2 ** attempt)  # 2, 4 seconds
                 print(f"[INFO] Semantic Scholar 429 rate-limit, waiting {wait}s (attempt {attempt+1}/2)...",
@@ -77,7 +81,6 @@ def _fetch_json(url, params):
                 continue
             return None
     return None
-
 
 def search_semantic_scholar(query: str, max_results: int = MAX_SEARCH_RESULTS,
                             year_from: Optional[int] = None, year_to: Optional[int] = None,
@@ -197,6 +200,32 @@ def search_arxiv(query: str, max_results: int = MAX_SEARCH_RESULTS,
     return results
 
 
+def _batch_fetch_citations(sem_results: list, arx_results: list) -> list:
+    """When Semantic Scholar fails, try to fetch citations for arXiv papers via single-paper API."""
+    if sem_results:
+        return sem_results  # SS worked, no need
+    arxiv_ids = [p.get("arxiv_id","") for p in arx_results if p.get("arxiv_id")]
+    if not arxiv_ids:
+        return []
+    import time
+    fetched = {}
+    for aid in arxiv_ids[:5]:  # limit to 5 to avoid rate limiting
+        try:
+            time.sleep(1.1)
+            url = f"https://api.semanticscholar.org/graph/v1/paper/arXiv:{aid}"
+            resp = requests.get(url, params={"fields":"citationCount"}, timeout=10)
+            if resp.status_code == 200:
+                d = resp.json()
+                fetched[aid] = d.get("citationCount", 0) or 0
+        except:
+            pass
+    for p in arx_results:
+        aid = p.get("arxiv_id","")
+        if aid in fetched:
+            p["citation_count"] = fetched[aid]
+    return arx_results
+
+
 def search_papers(query: str, count: int = 5,
                   year_from: Optional[int] = None,
                   year_to: Optional[int] = None,
@@ -209,6 +238,7 @@ def search_papers(query: str, count: int = 5,
 
     sem_results = search_semantic_scholar(query, fetch_count, year_from, year_to, offset)
     arx_results = search_arxiv(query, fetch_count, year_from, year_to, offset=offset)
+    arx_results = _batch_fetch_citations(sem_results, arx_results)
 
     seen = set()
     all_merged = []
