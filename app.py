@@ -399,13 +399,11 @@ if "账户" in current_tab:
 
 if "订阅" in current_tab:
     st.title("📬 论文订阅")
-    st.caption("订阅感兴趣的研究方向，系统将定期发送最新论文到你的邮箱。")
+    st.caption("每 3 天自动搜索一次订阅关键词，推送 1 篇最新论文到你的邮箱。")
+    st.info("⏰ 推送频率：每 3 天 08:00 · 每次推送 1 篇最高引用论文")
     st.divider()
     if is_guest:
         st.info("订阅需要登录后使用。")
-        if st.button("🔐 登录/注册", type="primary"):
-            st.session_state.page = "login"
-            st.rerun()
     elif not user.get("email"):
         st.warning("请先在账户中设置邮箱。")
     else:
@@ -417,7 +415,7 @@ if "订阅" in current_tab:
                     st.warning("请输入关键词")
                 else:
                     ok, msg = subscribe(user["id"], sk)
-                    if ok: st.success(msg); st.rerun()
+                    if ok: st.success(msg)
                     else: st.warning(msg)
         with c2:
             if st.button("📋 我的订阅", use_container_width=True):
@@ -429,10 +427,10 @@ if "订阅" in current_tab:
                 for s in subs:
                     cc1, cc2 = st.columns([4, 1])
                     with cc1:
-                        st.markdown(f"🔔 {s["keyword"]}")
-                        st.caption(f"📅 {s.get("created_at","")}")
+                        st.markdown(f"🔔 {s['keyword']}")
+                        st.caption(f"📅 创建于 {s.get('created_at','')} · 推送至 {user['email']}")
                     with cc2:
-                        if st.button("取消", key=f"unsub_{s["id"]}"):
+                        if st.button("取消订阅", key=f"unsub_{s['id']}"):
                             unsubscribe(user["id"], s["keyword"]); st.rerun()
             else:
                 st.caption("暂无订阅")

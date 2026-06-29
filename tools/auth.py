@@ -310,14 +310,20 @@ def get_all_active_subscriptions() -> list:
 # Pro membership
 # ============================================================
 def check_search_limit(user_id: int) -> tuple:
-    """Check if user has remaining free searches. Returns (can_search: bool, remaining: int, is_pro: bool)."""
+    """Check if user has remaining free searches.
+    Returns (can_search: bool, remaining: int, is_pro: bool, message: str).
+    """
     db = _conn()
     try:
         u = db.execute("SELECT is_pro, search_count FROM users WHERE id=?", (user_id,)).fetchone()
-        if not u: return False, 0, False
-        if u["is_pro"]: return True, -1, True
+        if not u:
+            return False, 0, False, "用户不存在"
+        if u["is_pro"]:
+            return True, -1, True, "💎 Pro 会员 · 无限制"
         remaining = max(0, FREE_SEARCH_LIMIT - (u["search_count"] or 0))
-        return remaining > 0, remaining, False
+        if remaining <= 0:
+            return False, 0, False, f"免费搜索次数已用完（{FREE_SEARCH_LIMIT}次）"
+        return True, remaining, False, f"剩余 {remaining}/{FREE_SEARCH_LIMIT} 次"
     finally:
         db.close()
 

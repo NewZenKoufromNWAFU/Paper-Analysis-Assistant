@@ -41,39 +41,19 @@ def _paper_key(paper: dict) -> str:
     return (paper.get("arxiv_id") or paper.get("paper_id") or paper.get("title", "")).strip().lower()
 
 
-def _fetch_json(url, params, max_attempts=2, api_key=None):
-    """GET JSON with API key + simple retry. Falls back to no-key if key is bad."""
-    for attempt in range(max_attempts):
-        headers = {}
-        if api_key and attempt < max_attempts - 1:
-            headers["x-api-key"] = api_key
-        # If key caused 500, retry without it
-        try:
-            resp = requests.get(url, params=params, headers=headers, timeout=15)
-            if resp.status_code == 500 or resp.status_code == 403:
-                # Invalid key — retry without key
-                if api_key and attempt < max_attempts - 1:
-                    api_key = None  # disable key for next attempt
-                    time.sleep(1)
-                    continue
-            if resp.status_code == 429:
-                wait = 3 + attempt * 5
-                print(f"[INFO] S2 429, waiting {wait}s (attempt {attempt+1}/{max_attempts})...", file=sys.stderr)
-                if attempt < max_attempts - 1:
-                    time.sleep(wait)
-                    continue
-            resp.raise_for_status()
-            return resp.json()
-        except requests.HTTPError:
-            if attempt < max_attempts - 1:
-                time.sleep(2)
-                continue
-        except Exception:
-            traceback.print_exc(file=sys.stderr)
-            if attempt < max_attempts - 1:
-                time.sleep(1)
-                continue
-    return None
+def _fetch_json(url, params, max_attempts=1, api_key=None):
+    """GET JSON with single attempt — 429 means immediately fallback to arXiv."""
+    headers = {}
+    if api_key:
+        headers["x-api-key"] = api_key
+    try:
+        resp = requests.get(url, params=params, headers=headers, timeout=15)
+        if resp.status_code in (429, 500, 503):
+            return None
+        resp.raise_for_status()
+        return resp.json()
+    except Exception:
+        return None
 
 
 def search_semantic_scholar(query: str, max_results: int = MAX_SEARCH_RESULTS,
@@ -251,12 +231,9 @@ def search_papers(query: str, count: int = 5,
     count = max(1, min(count, 10))
     fetch_count = max(count * 3 + len(exclude_keys), 20)
 
+    # Always call both — SemSch for enrichment, arXiv as reliable fallback
     sem_results = search_semantic_scholar(query, fetch_count, year_from, year_to, offset)
-    # Only fetch arXiv if SemSch didn't return enough
-    if len(sem_results) < count * 2:
-        arx_results = search_arxiv(query, fetch_count, year_from, year_to)
-    else:
-        arx_results = []
+    arx_results = search_arxiv(query, fetch_count, year_from, year_to)
 
     # Build SemSch index by arxiv_id for enrichment
     sem_by_aid = {}
