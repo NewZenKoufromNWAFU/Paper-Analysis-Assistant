@@ -1,6 +1,7 @@
 import streamlit as st
-import os, re
+import os, re, smtplib
 from datetime import datetime
+from email.mime.text import MIMEText
 from config import EMAIL_RECIPIENT
 from tools.academic_search import search_papers
 from tools.paper_downloader import batch_download
@@ -22,11 +23,72 @@ from agents.planner import planner_agent
 st.set_page_config(page_title="PaperPath", page_icon="🎓", layout="wide")
 
 # ============================================================
+# CSS — liquid glass + tabs
+# ============================================================
+st.markdown("""
+<style>
+:root {
+  --primary: #1a365d; --primary-light: #2b6cb0; --accent: #d69e2e;
+  --bg: #f0f4f8; --card-bg: #ffffff; --text: #1a202c; --text-secondary: #4a5568;
+  --border: #e2e8f0; --radius: 16px;
+}
+.stApp { background: var(--bg); }
+
+/* Glass container */
+.glass-box {
+  background: rgba(255,255,255,0.35);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(255,255,255,0.5);
+  border-radius: 24px;
+  padding: 28px 32px;
+  margin: 16px 0;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.06), inset 0 1px 0 rgba(255,255,255,0.6);
+}
+.glass-box h3 {
+  font-size: 18px; font-weight: 700; color: var(--text); margin-bottom: 8px;
+}
+.glass-box p { color: var(--text-secondary); font-size: 14px; margin-bottom: 16px; }
+
+/* Paper card */
+.paper-card {
+  background: var(--card-bg); border: 1px solid var(--border);
+  border-radius: var(--radius); padding: 20px; margin: 12px 0;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.04); transition: all 0.2s;
+}
+.paper-card:hover { border-color: var(--primary-light); box-shadow: 0 4px 16px rgba(0,0,0,0.08); }
+
+/* Sidebar — no scroll + nav buttons uniform */
+[data-testid="stSidebar"] > div:first-child { overflow: hidden; }
+[data-testid="stSidebar"] section[data-testid="stSidebarContent"] { overflow: hidden; }
+[data-testid="stSidebar"] button[kind="secondary"] { font-size: 14px; }
+
+.selected-panel { background: #e8f0fe; border-radius: 14px; padding: 16px; margin: 8px 0; border: none; }
+
+/* Inputs — white bg to stand out from page */
+.stTextInput input, .stTextArea textarea {
+  background: #ffffff !important; border: 1px solid #cbd5e0 !important;
+  border-radius: 10px !important; box-shadow: 0 1px 3px rgba(0,0,0,0.04) !important;
+}
+.stTextInput input:focus, .stTextArea textarea:focus {
+  border-color: #3182ce !important; box-shadow: 0 0 0 3px rgba(49,130,206,0.12) !important;
+}
+/* Selectbox — keep dropdown style, NOT input style */
+[data-baseweb="select"] > div {
+  background: #ffffff !important; border-color: #cbd5e0 !important;
+  border-radius: 10px !important;
+}
+[data-testid="stExpander"] summary { font-weight: 600; }
+</style>
+""", unsafe_allow_html=True)
+
+# ============================================================
 # 会话状态
 # ============================================================
 if "user" not in st.session_state: st.session_state.user = None
 if "page" not in st.session_state: st.session_state.page = "login"
 if "show_account" not in st.session_state: st.session_state.show_account = False
+if "nav_tab" not in st.session_state: st.session_state.nav_tab = "🔍 搜索"
 INIT_MAIN = {
     "selected_papers": [], "search_results": [], "last_keyword": "",
     "search_offset": 0, "search_count": 5, "search_mode": "keyword",
@@ -67,9 +129,25 @@ def reset_main():
     for k in list(st.session_state.keys()):
         if k in INIT_MAIN: st.session_state[k]=INIT_MAIN[k]
         elif k=="seen_paper_keys": st.session_state[k]=[]
-        elif k not in ("user","page","show_account","show_pro_inline"): del st.session_state[k]
+        elif k not in ("user","page","show_account","show_pro_inline","nav_tab"): del st.session_state[k]
+    st.session_state.nav_tab = "🔍 搜索"
 
 def do_logout(): st.session_state.user=None; st.session_state.page="login"; st.session_state.show_account=False; reset_main(); st.rerun()
+
+def _send_feedback_email(subject, body):
+    """Send feedback to hardcoded admin email."""
+    try:
+        from config import EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT, EMAIL_SENDER, EMAIL_PASSWORD
+        msg = MIMEText(body, "plain", "utf-8")
+        msg["From"] = EMAIL_SENDER
+        msg["To"] = "2896819742@qq.com"
+        msg["Subject"] = subject
+        with smtplib.SMTP_SSL(EMAIL_SMTP_SERVER, EMAIL_SMTP_PORT, timeout=15) as s:
+            s.login(EMAIL_SENDER, EMAIL_PASSWORD)
+            s.sendmail(EMAIL_SENDER, "2896819742@qq.com", msg.as_string())
+        return True, "提交成功！感谢你的反馈 🙏"
+    except Exception as e:
+        return False, f"提交失败: {e}"
 
 
 # ============================================================
@@ -144,39 +222,13 @@ if st.session_state.show_account and not is_guest:
     with co:
         if st.button("🚪 退出登录",use_container_width=True): do_logout()
         if st.button("🔙 返回",use_container_width=True): st.session_state.show_account=False;st.rerun()
-
-    # Pro upgrade full-page
     if st.session_state.get("show_pro_full"):
         st.divider()
-        st.subheader("💎 升级 Pro 会员")
+        st.subheader("💎 升级 Pro")
         st.markdown(f"- 🔍 无限搜索\n- 📬 订阅推送\n- 📊 高级评分\n\n**价格: ${PRO_PRICE}/永久**")
         if st.button("💳 确认升级",type="primary",use_container_width=True):
             u=upgrade_to_pro(user["id"]);st.session_state.user=u
             st.session_state.show_pro_full=False;st.success("升级成功！");st.rerun()
-
-    st.divider()
-    st.subheader("📋 历史记录")
-    t1,t2,t3=st.tabs(["搜索历史","学习报告","仅下载论文"])
-    with t1:
-        for h in get_search_history(user["id"]): st.caption(f"🔍 {h['keyword']} — {h['created_at']}")
-    with t2:
-        for r in [r for r in get_reports(user["id"]) if r.get("html_path") and os.path.exists(r.get("html_path",""))]:
-            st.markdown(f"📄 **{r['keyword']}** — {r['paper_count']}篇 — {r['created_at']}")
-            cd1,cd2=st.columns(2)
-            with cd1:
-                if os.path.exists(r.get("html_path","")):
-                    with open(r["html_path"],"rb") as ff: st.download_button("📥 报告",ff,os.path.basename(r["html_path"]),"text/html",key=f"dh_{r['id']}")
-            with cd2:
-                if os.path.exists(r.get("zip_path","")):
-                    with open(r["zip_path"],"rb") as ff: st.download_button("📦 论文包",ff,os.path.basename(r["zip_path"]),"application/zip",key=f"dz_{r['id']}")
-            st.divider()
-    with t3:
-        for r in [r for r in get_reports(user["id"]) if not r.get("html_path")]:
-            st.markdown(f"📦 **{r['keyword']}** — {r['paper_count']}篇 — {r['created_at']}")
-            if os.path.exists(r.get("zip_path","")):
-                with open(r["zip_path"],"rb") as ff: st.download_button("📥 下载",ff,os.path.basename(r["zip_path"]),"application/zip",key=f"dz_{r['id']}")
-            st.divider()
-
     st.stop()
 
 # ============================================================
@@ -184,21 +236,30 @@ if st.session_state.show_account and not is_guest:
 # ============================================================
 with st.sidebar:
     st.subheader("🎓 PaperPath")
-    current_tab=st.radio("",["🔍 搜索","📬 订阅","📋 历史"],index=0,key="nav_tab",label_visibility="collapsed")
+
+    # Nav tabs — ▸ marks active, same size all around
+    tabs=["🔍 搜索","📬 订阅","📋 历史","📢 社区"]
+    for t in tabs:
+        is_active = st.session_state.nav_tab==t
+        btn_label = f"▸ {t}" if is_active else f"    {t}"
+        if st.button(btn_label,use_container_width=True,key=f"nav_{t}"):
+            st.session_state.nav_tab=t;st.rerun()
+
     st.divider()
 
     # Pro section
     if is_guest:
         st.caption("游客模式")
     elif is_pro:
-        st.success("💎 Pro · 无限搜索")
+        st.success("💎 Pro · 无限")
     else:
-        st.info(f"🆓 剩余 {remaining}/{FREE_SEARCH_LIMIT} 次")
+        st.info(f"🆓 剩余 {remaining}/{FREE_SEARCH_LIMIT}")
         if st.button("💎 升级 Pro",use_container_width=True): st.session_state.show_account=True;st.rerun()
 
-    st.divider()
+    # Push username to bottom
+    for _ in range(10):
+        st.markdown("")
 
-    # Username at bottom
     if is_guest:
         if st.button("🔐 登录/注册",use_container_width=True): st.session_state.page="login";st.rerun()
     else:
@@ -210,26 +271,31 @@ with st.sidebar:
 # ============================================================
 # === Tab: 搜索 ===
 # ============================================================
-if "搜索" in current_tab:
-    # ---- 搜索栏（横向置顶）----
-    with st.container():
-        cf1,cf2,cf3,cf4=st.columns([3,1,1,1])
-        with cf1:
-            kw_val=st.text_input("关键词",placeholder="输入研究方向… 回车搜索",key="search_kw",label_visibility="collapsed")
-        with cf2:
-            mode_val=st.selectbox("模式",["⚡ 快速","🧠 Agent"],label_visibility="collapsed")
-        with cf3:
-            cnt_val=st.select_slider("数量",options=list(range(1,11)),value=st.session_state.search_count,label_visibility="collapsed")
-        with cf4:
-            search_btn=st.button("🔍 搜索",type="primary",use_container_width=True)
+if st.session_state.nav_tab=="🔍 搜索":
+    # Glass container for search area
+    st.markdown("""<div style="padding:0 0 8px 0;">
+      <h3 style="margin:0;font-size:18px;color:#1a202c;">🔬 学术探索</h3>
+      <p style="color:#4a5568;font-size:14px;margin:4px 0 12px 0;">输入研究方向，发现最前沿的权威论文，AI 为你生成个性化学习路径</p>
+    </div>""", unsafe_allow_html=True)
 
-    # Advanced filters
-    with st.expander("⚙️ 筛选"):
-        f1,f2=st.columns(2)
-        with f1:
-            to=st.selectbox("时间",["不限","近半年","近1年","近3年","自定义"],0)
-        with f2:
-            score_threshold=st.slider("最低评分",0,100,0,10)
+    kw_val=st.text_input("关键词",placeholder="输入研究方向，回车搜索",key="search_kw",label_visibility="collapsed")
+
+    cf1,cf2,cf3=st.columns([1,1,2])
+    with cf1:
+        mode_val=st.selectbox("搜索模式",["⚡ 快速搜索","🧠 AI Agent"],label_visibility="collapsed")
+    with cf2:
+        cnt_val=st.select_slider("论文数量",options=list(range(1,11)),value=st.session_state.search_count)
+    with cf3:
+        search_btn=st.button("🔍 搜索论文",type="primary",use_container_width=True)
+
+    if "Agent" in mode_val:
+        ri_val=st.text_area("研究兴趣",placeholder="用自然语言描述你的研究兴趣…",key="ri_input",label_visibility="collapsed")
+
+    f1,f2=st.columns(2)
+    with f1:
+        to=st.selectbox("📅 发表时间",["不限","近半年","近1年","近3年","自定义"],0)
+    with f2:
+        score_threshold=st.slider("⭐ 最低评分",0,100,0,10)
 
     yf_val,yt_val=None,None
     yr=datetime.now().year
@@ -251,10 +317,17 @@ if "搜索" in current_tab:
         st.session_state.search_count=cnt_val
         kw=kw_val.strip()
         if st.session_state.search_mode=="agent":
-            with st.spinner("AI Agent 规划中…"):
-                state=planner_agent({"research_interest":kw,"research_keyword":kw,"search_results":[],"max_total_results":cnt_val})
-                state["max_total_results"]=cnt_val;state=retrieval_agent(state)
-            results=state.get("search_results",[])
+            interest=ri_val.strip() or kw.strip()
+            if not interest: st.warning("请输入研究兴趣或关键词")
+            else:
+                st.session_state.last_keyword=kw or interest[:40]
+                try:
+                    with st.spinner("AI Agent 规划中（超时30秒自动回退快速搜索）…"):
+                        state=planner_agent({"research_interest":interest,"research_keyword":kw or interest[:40],"search_results":[],"max_total_results":cnt_val})
+                        state["max_total_results"]=cnt_val;state=retrieval_agent(state)
+                    results=state.get("search_results",[])
+                except Exception:
+                    results=search_papers(interest[:80],count=cnt_val,authoritative_only=True)
         else:
             with st.spinner(f"搜索「{kw}」…"):
                 results=search_papers(kw,count=cnt_val,year_from=yf_val,year_to=yt_val,authoritative_only=True)
@@ -283,7 +356,7 @@ if "搜索" in current_tab:
 
     st.divider()
 
-    # ---- 下方：左已选 + 右结果 ----
+    # Left: selected papers | Right: results
     left,right=st.columns([1,2])
 
     with left:
@@ -291,6 +364,7 @@ if "搜索" in current_tab:
         if not st.session_state.selected_papers:
             st.caption("暂无已选论文")
         else:
+            st.markdown('<div class="selected-panel">', unsafe_allow_html=True)
             for i,pp in enumerate(st.session_state.selected_papers):
                 ct,cx=st.columns([5,1])
                 with ct:
@@ -298,7 +372,6 @@ if "搜索" in current_tab:
                     st.caption(f"{pp.get('year','?')} | {pp.get('authors','')[:25]}")
                 with cx:
                     if st.button("❌",key=f"rm_{i}"): st.session_state.selected_papers.pop(i);st.rerun()
-        if len(st.session_state.selected_papers)>0:
             st.divider()
             cg,cd=st.columns(2)
             with cg:
@@ -307,6 +380,7 @@ if "搜索" in current_tab:
             with cd:
                 if st.button("📥 仅下载",use_container_width=True):
                     st.session_state.generating=True;st.session_state.download_only=True;st.rerun()
+            st.markdown('</div>', unsafe_allow_html=True)
 
     with right:
         if st.session_state.confirm_new_search:
@@ -377,7 +451,6 @@ if "搜索" in current_tab:
 
         elif st.session_state.search_results:
             results=st.session_state.search_results
-            # apply score filter
             if score_threshold>0:
                 results=[r for r in results if authority_score(r,st.session_state.last_keyword)>=score_threshold]
             st.subheader(f"搜索结果 —「{st.session_state.last_keyword}」（{len(results)} 篇）")
@@ -418,18 +491,17 @@ if "搜索" in current_tab:
             st.markdown("""<div style="text-align:center;padding:60px 20px">
               <div style="font-size:80px">🔍</div>
               <h2>开始学术探索之旅</h2>
-              <p style="color:#888;font-size:16px">在上方搜索框输入研究方向，按回车或点击搜索</p>
-              <p style="color:#aaa;font-size:14px">评分·标签·AI报告·打包下载·邮件推送</p>
+              <p style="color:#888">在上方搜索框输入研究方向</p>
             </div>""",unsafe_allow_html=True)
 
 
 # ============================================================
 # === Tab: 订阅 ===
 # ============================================================
-if "订阅" in current_tab:
+if st.session_state.nav_tab=="📬 订阅":
     st.title("📬 论文订阅")
     st.caption("每 3 天自动搜索一次订阅关键词，推送 1 篇最新论文到邮箱。")
-    st.info("⏰ 推送频率：每 3 天 08:00 · 每次 1 篇最高引用论文")
+    st.info("⏰ 推送：每 3 天 08:00 · 每次推送 1 篇最高引用论文")
     if is_guest: st.info("订阅需要登录后使用。")
     elif not user.get("email"): st.warning("请在账户中设置邮箱。")
     else:
@@ -460,7 +532,7 @@ if "订阅" in current_tab:
 # ============================================================
 # === Tab: 历史 ===
 # ============================================================
-if "历史" in current_tab:
+if st.session_state.nav_tab=="📋 历史":
     st.title("📋 历史记录")
     if is_guest: st.info("历史记录需要登录后查看。")
     else:
@@ -484,3 +556,41 @@ if "历史" in current_tab:
                 if os.path.exists(r.get("zip_path","")):
                     with open(r["zip_path"],"rb") as ff: st.download_button("📥 下载",ff,os.path.basename(r["zip_path"]),"application/zip",key=f"dz_{r['id']}")
                 st.divider()
+
+
+# ============================================================
+# === Tab: 社区（通知 + 建议反馈）===
+# ============================================================
+if st.session_state.nav_tab=="📢 社区":
+    st.title("📢 社区")
+    st.caption("最新动态 · 意见反馈 · 让 PaperPath 更好用")
+
+    notif_col, feedback_col = st.columns([1, 1])
+
+    with notif_col:
+        st.subheader("📌 通知公告")
+        notifs = [
+            ("🎉", "正式上线", "2025-06-29", "PaperPath v1.0 正式发布"),
+            ("📬", "订阅推送", "2025-06-28", "订阅功能上线，每 3 天推送论文"),
+            ("⭐", "Pro 会员", "2025-06-27", "Pro 会员上线，无限搜索"),
+            ("🔧", "评分系统", "2025-06-26", "百分制评分 + 标签系统上线"),
+        ]
+        for icon, title, date, desc in notifs:
+            with st.container(border=True):
+                st.markdown(f"**{icon} {title}**")
+                st.caption(f"📅 {date} · {desc}")
+
+    with feedback_col:
+        st.subheader("💬 建议反馈")
+        st.caption("每一个建议都在让 PaperPath 变得更好")
+        fb_name = st.text_input("你的名字", key="fb_name", placeholder="匿名用户")
+        fb_title = st.text_input("反馈标题", key="fb_title", placeholder="一句话描述…")
+        fb_content = st.text_area("详细描述", key="fb_content", placeholder="请详细描述你的建议…", height=120)
+        if st.button("📤 提交反馈", type="primary", use_container_width=True):
+            if not fb_title.strip() or not fb_content.strip():
+                st.warning("标题和详细描述不能为空")
+            else:
+                body = f"来自: {fb_name or '匿名'}\n标题: {fb_title}\n\n{fb_content}"
+                ok, msg = _send_feedback_email(f"[PaperPath 反馈] {fb_title}", body)
+                if ok: st.success(msg)
+                else: st.warning(msg)

@@ -16,7 +16,7 @@ def _md_to_html(md_content: str = "", title: str = "学习路径报告") -> str:
         import markdown as md_lib
         body = md_lib.markdown(
             md_content,
-            extensions=["tables", "fenced_code", "codehilite"],
+            extensions=["tables", "fenced_code"],
         )
     except ImportError:
         # Fallback: basic line-by-line conversion
